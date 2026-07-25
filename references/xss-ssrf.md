@@ -1,5 +1,9 @@
 # XSS-with-bot and SSRF
 
+**First decide which XSS you have — the tooling is different:**
+- **Flag is client-side and fires in *your* view** (DOM/reflected XSS, flag in DOM/`localStorage`/a JS var): you need a JS-executing client to confirm execution and read it out → `browser.md`. curl can't tell "executed" from "merely reflected."
+- **A privileged bot visits your payload** (the section below): the exploit fires in *the lab's* browser, not yours. Use curl + tunnel + listener. The browser pane can only pre-flight that your payload page renders.
+
 ## H. XSS + admin bot — report / submit-for-review features
 
 Applies when there's an "admin reviews your submission" workflow, a report link, or a contact form.

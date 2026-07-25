@@ -20,6 +20,8 @@ Some labs ship a layer whose whole job is to waste an agent's time. Recognising 
 
 **4. Don't bother evading.** A full Chrome XHR header set (UA + `Accept` + `Accept-Language` + `Sec-Ch-Ua*` + `Sec-Fetch-*` + `Referer`) scores "clean" and buys nothing. Reaching the worst tier changed no behavior. Spend the time on the app.
 
+*(If you genuinely need a clean-tier client — e.g. to reproduce something the detector only serves to real browsers — the in-app browser pane scores clean natively with no hand-built header set. See `browser.md`. But confirm it's actually worth it first; usually it isn't.)*
+
 **5. Read the detector's own log — it's usually the best recon on the box.** It names every defense (so you know which observations are lies) and it often leaks server state:
 
 ```bash

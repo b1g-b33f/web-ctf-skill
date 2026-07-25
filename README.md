@@ -4,10 +4,15 @@ Progressive-disclosure replacement for the old monolithic `~/.claude/commands/ct
 (36 KB, ~8.9k tokens loaded on every invocation).
 
 ```
-SKILL.md            ~1.2k tokens, always loaded: routing + order of operations
-references/*.md     13 files, loaded one at a time when a signal fires
+SKILL.md            ~1.6k tokens, always loaded: routing + order of operations
+references/*.md     14 files, loaded one at a time when a signal fires
 scripts/*.py        real tooling (no hardcoded paths — portable as-is)
 ```
+
+`references/browser.md` covers the in-app browser pane: a supplement to curl for the specific
+cases where JS execution or browser URL-parsing matters (DOM/reflected XSS, client-side
+traversal/redirect chains, clean-tier requests on anti-bot labs) — explicitly *not* the tool for
+admin-bot XSS, where the exploit must fire in the lab's browser and exfiltrate to a listener.
 
 ## Scripts
 

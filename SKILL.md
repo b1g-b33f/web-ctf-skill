@@ -59,6 +59,7 @@ Route on what the app actually did, not on a checklist sweep. Read **one** refer
 | Filename or path parameter; file upload accepting a filename | `references/traversal-upload.md` |
 | `/graphql` endpoint or introspection available | `references/graphql.md` |
 | "Admin reviews your submission" workflow; URL/callback param | `references/xss-ssrf.md` |
+| Payload must **execute** in client JS (DOM/reflected XSS, flag in DOM/localStorage); browser URL-parsing quirk; want a clean-tier client on an anti-bot lab | `references/browser.md` |
 | Prices, quantities, vouchers, multi-step workflows, balances | `references/logic-race.md` |
 | Any JSON body endpoint (cheap, no prerequisites) | `references/json-type-confusion.md` |
 | Rotating `Server`/status codes; canary/injection headers; bot scoring | `references/anti-bot.md` |

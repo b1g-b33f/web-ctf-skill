@@ -60,3 +60,5 @@ JWKS overwrite lands → go to `auth-jwt.md` § JWKS substitution.
 When a feature builds a URL by appending a **fixed** suffix to user input (plugin manifests, "app studio", widget marketplaces), a `#` fragment truncates everything after it, and a literal backslash can defeat redirect validation. Full chain (Grafana CVE-2025-4123 re-themed) is in the FurHire-013 writeup.
 
 **If a custom-branded feature feels over-engineered relative to the rest of the app, search for the real product it's themed after and look up that product's recent CVEs by name** — BugForge labs do re-implement disclosed CVEs.
+
+This chain depends on **browser** URL parsing (fragment truncation, backslash handling) — curl normalizes differently and won't reproduce it. Drive it in the in-app browser pane and watch where the request actually lands: `browser.md`.
