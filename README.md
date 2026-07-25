@@ -54,5 +54,7 @@ in `|| true`, which would swallow it.
 
 ## Rollback
 
-The original monolith is untouched at `~/.claude/commands/ctf.md`. Deleting this directory
-restores the previous behaviour exactly.
+The original monolith is preserved at `~/.claude/commands/ctf-legacy.md` (renamed from
+`ctf.md` so it no longer collides with this skill's `/ctf`). It's reachable as `/ctf-legacy`.
+To fully revert: delete this skill directory and `mv ctf-legacy.md ctf.md`. Once `/ctf` is
+confirmed loading the skill in a fresh session, `ctf-legacy.md` can be deleted.
