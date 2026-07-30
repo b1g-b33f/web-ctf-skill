@@ -42,7 +42,9 @@ def read(p):
         return fh.read()
 
 
-scripts = sorted(os.path.basename(p) for p in glob.glob("scripts/*.py"))
+scripts = sorted(os.path.basename(p) for p in
+                 glob.glob("scripts/*.py") + glob.glob("scripts/*.sh")
+                 + glob.glob("scripts/*/*.py"))
 refs = sorted(os.path.basename(p) for p in glob.glob("references/*.md"))
 readme, skill = read("README.md"), read("SKILL.md")
 docs = ["README.md", "SKILL.md"] + ["references/" + r for r in refs]
@@ -113,13 +115,29 @@ for d in docs:
     for h in set(re.findall(r'[a-z0-9-]{6,}\.(?:labs-app\.bugforge\.io|htb|thm)', body)):
         fail("%s contains a live lab hostname: %s" % (d, h))
 
-# 8. scripts compile ------------------------------------------------------------
+# 8. scripts parse --------------------------------------------------------------
 import py_compile
-for s in scripts:
-    try:
-        py_compile.compile(os.path.join("scripts", s), doraise=True)
-    except py_compile.PyCompileError as e:
-        fail("scripts/%s does not compile: %s" % (s, str(e).splitlines()[0]))
+import subprocess
+paths = (glob.glob("scripts/*.py") + glob.glob("scripts/*/*.py")
+         + glob.glob("scripts/*.sh"))
+for p in paths:
+    if p.endswith(".py"):
+        try:
+            py_compile.compile(p, doraise=True)
+        except py_compile.PyCompileError as e:
+            fail("%s does not compile: %s" % (p, str(e).splitlines()[0]))
+    else:
+        r = subprocess.run(["bash", "-n", p], capture_output=True, text=True)
+        if r.returncode:
+            fail("%s has a syntax error: %s" % (p, r.stderr.strip().splitlines()[0]))
+
+# 9. bundled scripts must not hardcode host paths (they ship with the repo) -----
+for p in paths:
+    body = read(p)
+    for m in set(re.findall(r'(?<![:${])(?:/c/Tools|C:/Tools|C:\\Tools)/[A-Za-z]\S*', body)):
+        if ":-" in body[max(0, body.find(m) - 30):body.find(m)]:
+            continue                    # ${VAR:-/c/Tools/...} default, fine
+        warn("%s hardcodes %s - prefer an env override with that as the default" % (p, m))
 
 quiet = "--quiet" in sys.argv
 if WARNS and not quiet:

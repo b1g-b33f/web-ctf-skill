@@ -6,7 +6,8 @@ Feroxbuster and nuclei take 1–5 minutes. **Do not block.** Launch and go strai
 
 ```bash
 mkdir -p /c/Tools/CTF/<challenge-name>/{recon,exploits,loot}
-nohup bash /c/Tools/ctf-init.sh <target> <challenge-name> <platform> > /c/Tools/CTF/<challenge-name>/recon/_init.log 2>&1 &
+nohup bash ~/.claude/skills/ctf/scripts/ctf-init.sh <target> <challenge-name> <platform> \
+  > /c/Tools/CTF/<challenge-name>/recon/_init.log 2>&1 &
 ```
 
 Produces in `recon/`: `headers.txt`, `root.html`, `meta_hits.txt`, `quickcheck_hits.txt`, `ferox.txt`, `nuclei.txt` (htb only).

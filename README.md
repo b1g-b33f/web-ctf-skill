@@ -25,6 +25,8 @@ admin-bot XSS, where the exploit must fire in the lab's browser and exfiltrate t
 | `jsmine.py` | Bundle → routes (incl. query-string and `.concat()` forms), method map, router table, secrets, comments |
 | `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags |
 | `ssrfget.py` | Drives a stored-response SSRF as an arbitrary read: trigger, then fetch the artifact the app saved. `--sweep` finds internal services and probes admin paths on each |
+| `ctf-init.sh` | Parallel background recon: scaffolds the workspace, then headers / meta files / quick paths / feroxbuster / nuclei (htb only) at once. `CTF_ROOT` and `SECLISTS` override the Windows defaults |
+| `forgeflare/` | `forgeflare.py` (session that auto-re-clears a Forgeflare challenge, `solve_pow()`, WordPress helpers) and `ffproxy.py` (reverse proxy on 127.0.0.1:8899 that injects headers + clearance so unmodified third-party tools work) |
 | `flaghook.py` | `PostToolUse` hook — scans every Bash result for flag patterns, logs to `~/.claude/ctf-flags.log` |
 
 ```bash
@@ -81,24 +83,33 @@ in `|| true`, which would swallow it.
    | File | What needs repointing |
    |---|---|
    | `SKILL.md` | `/c/Tools/CTF/`, `/c/Tools/Source Code/`; the Git-Bash argv-mangling note is Windows-only and can be dropped |
-   | `references/anti-bot.md` | `C:\Tools\Python\forgeflare\` tooling |
    | `references/auth-jwt.md` | `jwt_tool.py`, SecLists password lists |
    | `references/injection.md` | `sqlmap.py` |
    | `references/source-review.md` | `/c/Tools/Source Code/` |
    | `references/traversal-upload.md` | `C:/Tools/CTF/` |
    | `references/vault-index.md` | Obsidian vault root (**and the vault itself must be present**) |
-   | `references/web-recon.md` | `ctf-init.sh`, SecLists wordlists |
+   | `references/web-recon.md` | SecLists wordlists (`ctf-init.sh` is bundled now — set `CTF_ROOT`/`SECLISTS` instead of editing it) |
    | `references/xss-ssrf.md` | `cloudflared.exe` |
 
 4. Re-wire the hook in that machine's project settings with the new script path.
-5. **External dependencies are referenced, not bundled** — a fresh clone does not carry them:
-   `C:\Tools\ctf-init.sh`, `C:\Tools\Python\forgeflare\`, the SecLists tree, and the Obsidian
-   vault. The skill degrades gracefully without them (each is behind a specific signal), but
-   the sections that name them will be dead ends.
+5. **Remaining external dependencies** — a fresh clone does not carry these: the **SecLists
+   tree** (`SECLISTS` env var), the **Obsidian vault**, and the tools in `C:\Tools\CLAUDE.md`
+   (jwt_tool, sqlmap, cloudflared). The skill degrades gracefully without them — each sits
+   behind a specific signal — but the sections naming them will be dead ends.
+   `ctf-init.sh` and `forgeflare/` used to be on this list; they are bundled in `scripts/` now.
 
 ## Rollback
 
 The original monolith is preserved at `~/.claude/commands/ctf-legacy.md` (renamed from
 `ctf.md` so it no longer collides with this skill's `/ctf`). It's reachable as `/ctf-legacy`.
-To fully revert: delete this skill directory and `mv ctf-legacy.md ctf.md`. Once `/ctf` is
-confirmed loading the skill in a fresh session, `ctf-legacy.md` can be deleted.
+To fully revert, **restore the bundled tooling first** — `ctf-legacy.md` still expects it at
+the old paths, and deleting this directory would take it with them:
+
+```bash
+cp ~/.claude/skills/ctf/scripts/ctf-init.sh /c/Tools/ctf-init.sh
+mkdir -p /c/Tools/Python/forgeflare && cp ~/.claude/skills/ctf/scripts/forgeflare/*.py /c/Tools/Python/forgeflare/
+```
+
+Then delete this skill directory and `mv ctf-legacy.md ctf.md`. Once `/ctf` is confirmed
+loading the skill in a fresh session, `ctf-legacy.md` can be deleted and this coupling
+disappears.

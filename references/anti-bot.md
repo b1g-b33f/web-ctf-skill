@@ -67,10 +67,10 @@ A Cloudflare pastiche that hard-blocks: no app response until cleared. **Reusabl
 already exists — do not rebuild it:**
 
 ```bash
-# C:\Tools\Python\forgeflare\  (lab-agnostic; target from $FORGEFLARE_TARGET or argv)
+# scripts/forgeflare/  (lab-agnostic; target from $FORGEFLARE_TARGET or argv)
 #   forgeflare.py  -- FF() session that auto-re-clears; solve_pow(); wp_login()/wp_nonce()
 #   ffproxy.py     -- reverse proxy on 127.0.0.1:8899 injecting headers + clearance
-python C:/Tools/Python/forgeflare/ffproxy.py <target> &
+python ~/.claude/skills/ctf/scripts/forgeflare/ffproxy.py <target> &
 ```
 
 Point third-party tools (a public PoC, sqlmap, ffuf, curl) **at the proxy** — not via
