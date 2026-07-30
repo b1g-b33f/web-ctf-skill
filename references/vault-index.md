@@ -10,6 +10,25 @@ The vault is 1,160 notes / 522 MB. **Never crawl it and never `grep -r` the whol
 
 If you're reaching for this because you're out of *ideas* rather than out of *payloads*, stop — go back and re-read the responses you already have. That's where the answer usually is.
 
+## Exception: a **named** CVE or technique overrides all three
+
+If the brief, a hint, or the user names something specific ("did you read the latest
+wp2shell?", a CVE id, a technique by name), **go read that writeup first — before probing.**
+This inverts the normal order and it is correct: on WordMess-001 the hint named
+CVE-2026-63030 and the PoC was already on disk. ~20 rounds went into XSS, legacy handlers
+and credential guessing; one web search returned the mechanism ("an error at index 0 shifts
+every subsequent handler assignment") and the exploit landed in 2 requests.
+
+- **"The payload doesn't execute" ≠ "the bug class isn't here."** Labs re-implement real
+  CVEs in a different stack (a Grafana CVE re-themed; a PHP/MySQL PoC against Node/Express).
+  Port the *primitive*, not the payload.
+- **A PoC shows *what* to send; the advisory explains *why*.** You need the mechanism to
+  port it. Read both.
+- **A 403 on the target route is not a wall when bypassing that exact check IS the CVE.**
+- **Watch for effects that are shifted rather than absent** — the WordMess giveaway was a
+  403 landing on a *public* route one slot after the privileged one. Verdicts moved; they
+  weren't skipped.
+
 ## The one-way rule
 
 The vault supplies **payloads for a hypothesis the target already suggested.** It must never choose the target.
@@ -41,6 +60,7 @@ Base: `/c/Obsidian notes/Pentesting notes/02-AppSec/`
 | Discovery / fuzzing gaps | `04-Information Gathering and Fuzzing - Web Edition/02-Web Fuzzing Cheat Sheet.md` |
 | Payload blocked by a WAF | `WAF Bypass.md` |
 | Chained / exotic techniques | `22-Advanced Web Attacks/01-Advanced Attacks Cheat Sheet.md` |
+| **CSPT** (client-side path traversal) | `22-Advanced Web Attacks/Bugforge Advanced Web Attacks/01-CSPT Deep Dive.md` — see `## CSPT Lab - CSPT 1` for the full chain (CSPT → reviewer-bot email rewrite → password reset → takeover) |
 | WordPress target | `19-Hacking Wordpress/01-Hacking WordPress Cheat Sheet.md` |
 
 Prior lab writeups (read only when the current target looks like a re-theme of one): `25-AppSec Boxes/`, `Bugforge NoSQL Injections/`

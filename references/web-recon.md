@@ -71,6 +71,15 @@ Also extract the client-side **router** table — it reveals pages (and therefor
 grep -oE 'path:"[^"]*"' recon/main.js | sort -u
 ```
 
+**Also flag request paths built by string concatenation from `location.search` / `location.hash`** — that one pattern is the tell for client-side path traversal (CSPT):
+
+```bash
+grep -oE "(?:'|\")/api/[^'\"]*(?:'|\")\s*\+\s*\w+" recon/main.js | sort -u
+grep -nE 'location\.(search|hash)|URLSearchParams' recon/main.js | head
+```
+
+When a path is concatenated from **more than one** attacker-controlled value, both may be injectable but only one reaches the target — it's segment arithmetic, so count before picking. Prefer the **last** interpolated parameter: nothing follows it, so the payload ends the URL cleanly, whereas an earlier one leaves the fixed suffix trailing into the query string and corrupting the value. Traversal that overshoots clamps at root instead of erroring, so a wrong count fails *silently*. The sink decides whether the gadget is worth anything — a bodyless `PUT` is inert unless the target endpoint reads query params, so check that (see §5) before writing it off. Full worked chain: `vault-index.md` → CSPT.
+
 Flag any interesting app content — user data, bios, descriptions, config values referencing endpoints. Follow those up first.
 
 ## 3. Probe every endpoint
@@ -118,3 +127,41 @@ ffuf -u <target>/api/FUZZ -w <wordlist> -mc all -fs <fallback-size> -t 8
 Get `<fallback-size>` by requesting a guaranteed-bogus path first. Verify with a canary wordlist containing one known-good entry before trusting an empty result set — and never pipe ffuf through a grep that can swallow the results table.
 
 If fuzzing finds new endpoints → back to probing.
+
+## 5. Where wordlist brute force structurally fails
+
+A 39k-entry merged wordlist (SecLists `api-endpoints` + `objects` + `api-seen-in-wild` +
+`actions-lowercase` + `raft-medium-directories`) against Deskly's `/api/` found **5 of 8**
+real endpoints. Reading the client JS found 7 of 8 in two curl calls. The three misses were
+not bad luck — each is a shape wordlists cannot reach:
+
+| Blind spot | Why brute force misses it | Fix |
+|---|---|---|
+| **Hyphenated compounds** (`/api/review-requests`) | no SecLists API wordlist contains them | hand-written list: `review-requests`, `reset-password`, `password-reset`, `gift-cards` |
+| **Nested under a 404-ing parent** (`/api/account/recover`) | `GET /api/account` 404s, so feroxbuster never recurses — recursion needs a non-404 parent | explicit nested guesses: `account/reset`, `account/verify`, `account/recover` |
+| **PUT/PATCH-only routes** (`PUT /api/account`) | Express returns an identical 404 for a method mismatch, so a GET,POST scan filters the hit away | fuzz the method matrix |
+
+```bash
+# method matrix beats a 39k wordlist for this shape: ~15 names x 5 methods = ~75 requests
+for n in me account profile settings users/me user preferences notifications; do
+  for m in GET POST PUT PATCH DELETE; do
+    printf '%-6s /api/%-16s ' "$m" "$n"
+    curl -s -o /dev/null -w '%{http_code}\n' -X $m "<target>/api/$n" $AUTH_HEADER
+  done
+done
+```
+
+**Auth middleware is a free existence oracle.** Unauthenticated, `401` = the route exists,
+`404` = it doesn't. You can map a protected API surface with no account at all.
+
+**Probe `?param=` on PUT/PATCH, not just JSON bodies.** `PUT /api/account?email=x@y.com`
+returned `{"message":"Account updated"}` with an empty body — that's what makes the endpoint
+reachable from a bodyless cross-origin `fetch`, so it's a security-relevant property rather
+than a trivium.
+
+**Verify every fuzzer hit with curl.** ffuf `-s` attributed three Deskly hits to the GET run
+when all three were POST-only — the fuzzer's own labeling was wrong.
+
+Express fingerprint: unknown path → `404` + HTML `Cannot GET /path`; real route → JSON.
+Clean discriminator (`probe.py` keys off it). Express routes are case-insensitive by default,
+so `/api/Account` hits are noise, not findings.

@@ -22,6 +22,11 @@ If args are missing, infer from the conversation. Don't stop to ask for a challe
 
 Scanners are step 7, not step 1. On GalaxyDash-011 a scanner-first run cost first blood by ~1 minute; the flag was in the first authenticated endpoint probe. Read the data the app returns before reaching for a tool.
 
+**Exception — a named CVE or technique jumps the queue.** If the brief, a hint, or the user
+names something specific (a CVE id, "wp2shell", a technique by name), search for and read
+that writeup *before* probing. Don't re-derive the mechanism from a PoC script and don't
+substitute a generic playbook. Details and the failure it's drawn from: `references/vault-index.md`.
+
 Two rules that repeatedly decide solves:
 
 - **Use `curl -si` always.** Flags land in response *headers* (`X-Flag` on an otherwise-normal 403). Body-only checks make live endpoints look dead.
@@ -88,6 +93,19 @@ After every attempt: check the response — headers included — for the flag pa
 3. Pick the single most promising untested vector and pursue it — don't ask, go
 4. Only if genuinely out of ideas on that vector: `references/vault-index.md`
 5. Loop back to routing
+
+**A negative from behind a tripped guard is *unknown*, not *killed*.** When an endpoint
+leaks state in a validation error, it's tempting to farm that oracle by holding one field
+deliberately wrong across a whole matrix of probes — but the guard producing the oracle
+runs *first*, so every other variable in the matrix dies on the same check and reads as
+inert. On cheesy-006 this hid the flag: `tip:-100` was probed in the very first sweep but
+always against a deliberately-wrong `paid`, so it 400'd on the total check and looked
+clamped. Paid correctly, a negative tip returns the flag as the order's `order_number`.
+
+An error oracle is a **measurement** tool, not an **exploitation** tool. After farming one,
+re-run every interesting variant with everything else valid so each request reaches the
+deepest code path — and record oracle-run negatives in `WORKLOG.md` as untested, never as
+hypotheses killed.
 
 **The goal is the flag. Do not stop, do not ask for direction, do not summarise and wait** until the flag is in hand or every surface is marked exhausted.
 

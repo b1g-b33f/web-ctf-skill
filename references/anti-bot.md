@@ -1,8 +1,25 @@
 # Anti-AI / anti-bot layers
 
-Some labs ship a layer whose whole job is to waste an agent's time. Recognising it early saves the most time, because **most of what it does is theatre** — on Tanuki nothing it did ever blocked or altered a real response.
+## Triage first: friction or enforcement?
 
-## Recognise it
+There are two kinds and they demand opposite responses. Decide which you have before
+anything else — one request answers it:
+
+| | **Friction** (Tanuki) | **Enforcement** (Forgeflare / WordMess-001) |
+|---|---|---|
+| Does the app respond at all? | yes, always | **no** — nothing until you clear the gate |
+| What it does | rewrites status, rotates `Server`, injects canaries, adds latency | `403 {"code":"forgeflare_challenge"}` on every route |
+| Correct response | ignore it, spend the time on the app | **solve it first**, then run the methodology |
+
+```bash
+curl -si <target>/api/products     # real JSON body -> friction.  403 + a challenge code -> enforcement.
+```
+
+Everything from here to "Forgeflare" is about the **friction** kind, where most of what
+the layer does is theatre — on Tanuki nothing it did ever blocked or altered a real
+response.
+
+## Recognise it (friction kind)
 
 - `Server` header rotating between Apache / nginx / IIS / cloudflare across requests
 - Every path returning 2xx (200/201/202) including guaranteed-bogus ones
@@ -38,6 +55,45 @@ On Tanuki that endpoint was unauthenticated and logged `ts` in **server-side epo
 
 **6. Check for genuine deception before trusting a find.** If the layer advertises honeypots/labyrinth, confirm no deception events fired for your requests, and re-verify a flag with a second independent request before submitting.
 
-## What this layer is not
+## What the friction kind is not
 
 It is not the vulnerability, and it is not usually *hiding* the vulnerability — the app underneath is a normal web app with a normal bug. Do not let the theatre pull you into meta-analysis; run the standard methodology and use the detector as a free information source.
+
+---
+
+# Forgeflare — the enforcement kind (WordMess-001)
+
+A Cloudflare pastiche that hard-blocks: no app response until cleared. **Reusable tooling
+already exists — do not rebuild it:**
+
+```bash
+# C:\Tools\Python\forgeflare\  (lab-agnostic; target from $FORGEFLARE_TARGET or argv)
+#   forgeflare.py  -- FF() session that auto-re-clears; solve_pow(); wp_login()/wp_nonce()
+#   ffproxy.py     -- reverse proxy on 127.0.0.1:8899 injecting headers + clearance
+python C:/Tools/Python/forgeflare/ffproxy.py <target> &
+```
+
+Point third-party tools (a public PoC, sqlmap, ffuf, curl) **at the proxy** — not via
+`curl -x` — so they run unmodified. Bonus: `127.0.0.1` also satisfies "is this local?"
+gates that some PoCs enforce before hitting a remote host.
+
+**Three gates:**
+
+1. **Header fingerprint.** Missing `Accept-Language` or `Sec-Fetch-*` → `403`
+   `{"code":"forgeflare_challenge"}`. It names the failing signals in `reasons`
+   (`bot-ua`, `no-accept-language`, `no-sec-fetch`) — read them, don't guess.
+2. **SHA-256 proof of work.** Find `nonce` where `sha256(n + ":" + nonce)` has 16 leading
+   zero bits. `n`/`difficulty`/`token` come from the `<script id="ff-data">` JSON on
+   `/forgeflare/challenge`. ~65k hashes, trivial in Python; the on-page checkbox is only
+   a trigger.
+3. **`POST /forgeflare/verify`** `{token, nonce, to, hp:"", telemetry}` — telemetry must
+   look human (`mouseMoves>0`, `clicks>0`, `webdriver:false`, plausible `dwellMs`). `hp`
+   is a honeypot field, must stay empty. Yields `forgeflare_clearance` with a **60-second
+   TTL**, so re-clear continuously.
+
+**Never conflate the two 403s.** `{"code":"forgeflare_challenge"}` is the edge;
+`{"code":"rest_forbidden"}` is the *app's* authorization. Time went into re-checking the
+anti-bot layer when every 403 in play was the app's — and on that lab, defeating the app's
+403 *was* the vulnerability (see `vault-index.md` on named CVEs).
+
+Honeypot at `/forgeflare/trap` (hidden link + `robots.txt`) — never request it.
