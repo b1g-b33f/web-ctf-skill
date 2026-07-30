@@ -98,18 +98,17 @@ in `|| true`, which would swallow it.
    behind a specific signal — but the sections naming them will be dead ends.
    `ctf-init.sh` and `forgeflare/` used to be on this list; they are bundled in `scripts/` now.
 
-## Rollback
+## Provenance
 
-The original monolith is preserved at `~/.claude/commands/ctf-legacy.md` (renamed from
-`ctf.md` so it no longer collides with this skill's `/ctf`). It's reachable as `/ctf-legacy`.
-To fully revert, **restore the bundled tooling first** — `ctf-legacy.md` still expects it at
-the old paths, and deleting this directory would take it with them:
+This skill replaced a 937-line / 36 KB monolithic command that loaded ~8.9k tokens on every
+invocation. That command was retired on 2026-07-30 once the skill had been proven on live
+labs; `archive/ctf-legacy.md` is the verbatim copy.
 
-```bash
-cp ~/.claude/skills/ctf/scripts/ctf-init.sh /c/Tools/ctf-init.sh
-mkdir -p /c/Tools/Python/forgeflare && cp ~/.claude/skills/ctf/scripts/forgeflare/*.py /c/Tools/Python/forgeflare/
-```
+**It is history, not a rollback path.** The `/ctf-legacy` slash command no longer exists, and
+the archive is not maintained — it references `/c/Tools/ctf-init.sh` and
+`/c/Tools/Python/forgeflare/`, which have moved into `scripts/`. Read it to recover a payload
+or a phrasing the decomposition dropped; don't run it.
 
-Then delete this skill directory and `mv ctf-legacy.md ctf.md`. Once `/ctf` is confirmed
-loading the skill in a fresh session, `ctf-legacy.md` can be deleted and this coupling
-disappears.
+Every section of it maps onto a reference: IDOR/mass-assignment → `access-control.md`,
+SQLi → `injection.md`, SSTI → `ssti.md`, traversal → `traversal-upload.md`,
+JWT → `auth-jwt.md`, JS harvest and probing → `web-recon.md`.
