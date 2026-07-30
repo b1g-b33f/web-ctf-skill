@@ -87,8 +87,13 @@ Flag any interesting app content — user data, bios, descriptions, config value
 Hit everything found, **with `$AUTH_HEADER` and again without it.** Use the script — it does the paired requests, calibrates the fallback body so jittered status codes can't fool it, saves every response, and scans headers as well as bodies:
 
 ```bash
-python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" \
-  --paths paths.txt --methods --out recon/probe
+# feed it jsmine's METHOD -> PATH section, not just the path list: probing a
+# POST-only route with GET returns the SPA index, which matches the 404
+# calibration exactly and reports not-a-route
+python ~/.claude/skills/ctf/scripts/jsmine.py recon/ \
+  | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
+  | python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" \
+      --paths - --methods --out recon/probe
 ```
 
 Manual equivalent:

@@ -4,10 +4,14 @@ Progressive-disclosure replacement for the old monolithic `~/.claude/commands/ct
 (36 KB, ~8.9k tokens loaded on every invocation).
 
 ```
-SKILL.md            ~1.6k tokens, always loaded: routing + order of operations
+SKILL.md            ~2.7k tokens, always loaded: routing + order of operations
 references/*.md     14 files, loaded one at a time when a signal fires
 scripts/*.py        real tooling (no hardcoded paths — portable as-is)
 ```
+
+**Watch the SKILL.md figure.** It was ~1.6k tokens at creation and is the one file loaded on
+*every* invocation, so it is the budget that matters. When a lesson can live in a reference,
+put it there — SKILL.md should only carry what changes which reference you open.
 
 `references/browser.md` covers the in-app browser pane: a supplement to curl for the specific
 cases where JS execution or browser URL-parsing matters (DOM/reflected XSS, client-side
@@ -19,12 +23,18 @@ admin-bot XSS, where the exploit must fire in the lab's browser and exfiltrate t
 | Script | Purpose |
 |---|---|
 | `jsmine.py` | Bundle → routes (incl. query-string and `.concat()` forms), method map, router table, secrets, comments |
-| `probe.py` | Every endpoint with auth **and** without; calibrates the not-found body so status jitter can't hide routes; scans headers + bodies for flags |
+| `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags |
+| `ssrfget.py` | Drives a stored-response SSRF as an arbitrary read: trigger, then fetch the artifact the app saved. `--sweep` finds internal services and probes admin paths on each |
 | `flaghook.py` | `PostToolUse` hook — scans every Bash result for flag patterns, logs to `~/.claude/ctf-flags.log` |
 
 ```bash
 python ~/.claude/skills/ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
-python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt --methods
+
+# pipe the METHOD -> PATH section so POST-only routes are probed as POST
+python ~/.claude/skills/ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
+  | python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths - --methods
+
+python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
 ```
 
 ## Hook wiring
@@ -46,11 +56,27 @@ in `|| true`, which would swallow it.
 
 1. Copy this directory to `~/.claude/skills/ctf/`.
 2. `scripts/*.py` need no changes — they take paths as arguments and use `expanduser`.
-3. Fix tool paths in these four files, which reference the Windows layout:
-   `references/auth-jwt.md` (jwt_tool), `references/traversal-upload.md`,
-   `references/web-recon.md` (ctf-init.sh), `references/vault-index.md` (Obsidian vault root).
+   (`ssrfget.py` contains Windows Git-Bash paths only as argv-demangling *fallbacks*;
+   they simply never match on Linux.)
+3. Fix tool paths in these **nine** files, which reference the Windows layout:
+
+   | File | What needs repointing |
+   |---|---|
+   | `SKILL.md` | `/c/Tools/CTF/`, `/c/Tools/Source Code/`; the Git-Bash argv-mangling note is Windows-only and can be dropped |
+   | `references/anti-bot.md` | `C:\Tools\Python\forgeflare\` tooling |
+   | `references/auth-jwt.md` | `jwt_tool.py`, SecLists password lists |
+   | `references/injection.md` | `sqlmap.py` |
+   | `references/source-review.md` | `/c/Tools/Source Code/` |
+   | `references/traversal-upload.md` | `C:/Tools/CTF/` |
+   | `references/vault-index.md` | Obsidian vault root (**and the vault itself must be present**) |
+   | `references/web-recon.md` | `ctf-init.sh`, SecLists wordlists |
+   | `references/xss-ssrf.md` | `cloudflared.exe` |
+
 4. Re-wire the hook in that machine's project settings with the new script path.
-5. `ctf-init.sh` still lives at `C:\Tools\ctf-init.sh` (canonical) — it is referenced, not bundled.
+5. **External dependencies are referenced, not bundled** — a fresh clone does not carry them:
+   `C:\Tools\ctf-init.sh`, `C:\Tools\Python\forgeflare\`, the SecLists tree, and the Obsidian
+   vault. The skill degrades gracefully without them (each is behind a specific signal), but
+   the sections that name them will be dead ends.
 
 ## Rollback
 
