@@ -9,9 +9,20 @@ Usage:
   python probe.py --base https://target [--token TOK | --cookie 'k=v'] --paths paths.txt
   python jsmine.py recon/ | grep '^  /api' | python probe.py --base https://target --token TOK --paths -
 
+  # feed it jsmine's METHOD -> PATH section so POST routes get probed as POST:
+  python jsmine.py recon/ | python probe.py --base https://target --token TOK --paths -
+
+Input lines may be either "/api/thing" (probed as GET) or "POST /api/thing".
+GET-only probing silently mislabels write-only endpoints as not-a-route: an SPA
+serves index.html for GET /api/profile/avatar/import, which looks exactly like a
+404 fallback. That endpoint was the entire solve on CafeClub.
+
 Options:
   --out DIR     save every response body (default: ./probe_out)
   --methods     also send OPTIONS to enumerate allowed methods
+  --write       also probe PUT/PATCH/DELETE (skipped by default -- they mutate
+                your own test state; GET/POST discovery is non-destructive enough)
+  --id VAL      substitute for {...} placeholders in jsmine paths (default 1)
   --delay S     per-request delay (default 0.05)
 """
 import argparse
@@ -50,11 +61,46 @@ def scan_flags(resp):
     return hits
 
 
-def fetch(sess, url, headers, timeout=20):
+BODY_METHODS = ("POST", "PUT", "PATCH")
+WRITE_METHODS = ("PUT", "PATCH", "DELETE")
+
+
+def fetch(sess, url, headers, method="GET", timeout=20):
+    """An empty JSON body is deliberate: a real endpoint answers a validation
+    error ("password required"), a non-route answers the 404/SPA fallback. That
+    difference is the discovery signal."""
     try:
-        return sess.get(url, headers=headers, timeout=timeout, allow_redirects=False, verify=False)
+        kw = dict(headers=headers, timeout=timeout, allow_redirects=False, verify=False)
+        if method in BODY_METHODS:
+            kw["json"] = {}
+        return sess.request(method, url, **kw)
     except Exception as e:
         return e
+
+
+def parse_targets(raw, include_write, ident):
+    """Accept both '/api/x' and 'POST /api/x'. jsmine emits both shapes."""
+    targets, seen = [], set()
+    for line in raw.splitlines():
+        parts = line.strip().split()
+        if not parts:
+            continue
+        if len(parts) >= 2 and parts[0].isalpha() and parts[0].isupper() and parts[1].startswith("/"):
+            method, path = parts[0], parts[1]
+        elif parts[0].startswith("/"):
+            method, path = "GET", parts[0]
+        else:
+            continue
+        if method in WRITE_METHODS and not include_write:
+            continue
+        path = re.sub(r'\{[^}]*\}', ident, path)      # /api/orders/{...} -> /api/orders/1
+        if "{" in path or "}" in path:
+            continue
+        key = (method, path)
+        if key not in seen:
+            seen.add(key)
+            targets.append(key)
+    return targets
 
 
 def describe(r):
@@ -66,6 +112,16 @@ def describe(r):
 
 ERROR_HINTS = ("error", "unauthorized", "forbidden", "denied", "required",
                "invalid", "not found", "must be", "missing")
+
+# Express's default 404 embeds the path ("Cannot POST /api/favorites/"), so its
+# length changes with every path and pure size-matching never recognises it.
+EXPRESS_404 = re.compile(r'Cannot (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /', re.I)
+
+
+def is_framework_404(r):
+    if isinstance(r, Exception) or r is None:
+        return False
+    return bool(EXPRESS_404.search((r.text or "")[:400]))
 
 
 def looks_like_error(r):
@@ -84,17 +140,15 @@ def main():
     ap.add_argument("--cookie")
     ap.add_argument("--out", default="probe_out")
     ap.add_argument("--methods", action="store_true")
+    ap.add_argument("--write", action="store_true")
+    ap.add_argument("--id", default="1")
     ap.add_argument("--delay", type=float, default=0.05)
     a = ap.parse_args()
 
     base = a.base.rstrip("/")
     raw = sys.stdin.read() if a.paths == "-" else open(a.paths, encoding="utf-8").read()
-    paths = []
-    for line in raw.splitlines():
-        p = line.strip().split()[0] if line.strip() else ""
-        if p.startswith("/") and p not in paths:
-            paths.append(p)
-    if not paths:
+    targets = parse_targets(raw, a.write, a.id)
+    if not targets:
         print("no paths given")
         return 1
     os.makedirs(a.out, exist_ok=True)
@@ -108,22 +162,30 @@ def main():
 
     sess = requests.Session()
 
-    # ---- calibrate the not-found body; status codes may be jittered ----------
+    # ---- calibrate the not-found body PER METHOD; status codes may be jittered
+    # A POST to a bogus path answers differently from a GET to one, so a single
+    # GET calibration would mislabel every POST route.
     bogus = "/" + "".join(random.choices(string.ascii_lowercase, k=18))
-    cal = fetch(sess, base + bogus, auth)
-    cal_status, cal_size, cal_ctype = describe(cal)
-    print("[*] calibration %-22s -> status=%s size=%s ctype=%s" % (bogus, cal_status, cal_size, cal_ctype))
-    print("[*] treating size==%s + ctype==%s as NOT-A-ROUTE (status ignored)\n" % (cal_size, cal_ctype))
+    cal_by_method = {}
+    for m in sorted({t[0] for t in targets}):
+        c = fetch(sess, base + bogus, auth, m)
+        cs, csize, cctype = describe(c)
+        cal_by_method[m] = (csize, cctype)
+        print("[*] calibration %-6s %-20s -> status=%s size=%s ctype=%s"
+              % (m, bogus, cs, csize, cctype))
+    print("[*] size+ctype matching the above = NOT-A-ROUTE (status ignored)\n")
 
-    print("%-40s %-22s %-22s %s" % ("PATH", "WITH AUTH", "NO AUTH", "VERDICT"))
-    print("-" * 104)
+    print("%-46s %-22s %-22s %s" % ("METHOD PATH", "WITH AUTH", "NO AUTH", "VERDICT"))
+    print("-" * 110)
 
     flags, leaks, real = {}, [], []
-    for p in paths:
+    for method, p in targets:
         url = base + p
-        ra = fetch(sess, url, auth) if has_auth else None
+        label = "%-6s %s" % (method, p)
+        cal_size, cal_ctype = cal_by_method[method]
+        ra = fetch(sess, url, auth, method) if has_auth else None
         time.sleep(a.delay)
-        rn = fetch(sess, url, BASE_HEADERS)
+        rn = fetch(sess, url, BASE_HEADERS, method)
         time.sleep(a.delay)
 
         sa = describe(ra) if ra is not None else ("-", 0, "-")
@@ -134,14 +196,14 @@ def main():
             return d[1] == cal_size and d[2] == cal_ctype
 
         primary = ra if ra is not None else rn
-        if is_fallback(sa if ra is not None else sn):
+        if is_fallback(sa if ra is not None else sn) or is_framework_404(primary):
             verdict = "not-a-route"
         elif not has_auth:
             verdict = "reachable"
-            real.append(p)
+            real.append(label)
         elif isinstance(rn, Exception):
             verdict = "auth-required"
-            real.append(p)
+            real.append(label)
         elif (not is_fallback(sn) and sa[0] != "ERR"
               and (rn.text or "") == (ra.text or "") and sn[1] > 0
               and not looks_like_error(rn)):
@@ -149,19 +211,19 @@ def main():
             # error bodies ("Admin access required" vs "Access token required")
             # are not a leak
             verdict = "*** NO-AUTH LEAK — identical body without token ***"
-            leaks.append(p)
-            real.append(p)
+            leaks.append(label)
+            real.append(label)
         elif not is_fallback(sn) and sn[2].startswith("application/json") and sn[1] > 40 \
                 and not looks_like_error(rn):
             verdict = "*** NO-AUTH DATA — json returned without token ***"
-            leaks.append(p)
-            real.append(p)
+            leaks.append(label)
+            real.append(label)
         else:
             verdict = "auth-required"
-            real.append(p)
+            real.append(label)
 
-        print("%-40s %-22s %-22s %s" % (
-            p[:40], "%s %sB %s" % sa if ra is not None else "-",
+        print("%-46s %-22s %-22s %s" % (
+            label[:46], "%s %sB %s" % sa if ra is not None else "-",
             "%s %sB %s" % sn, verdict))
 
         # save + scan
@@ -169,13 +231,14 @@ def main():
             if isinstance(r, Exception) or r is None:
                 continue
             fn = re.sub(r'[^a-zA-Z0-9]+', '_', p).strip('_') or "root"
+            fn = "%s.%s" % (method.lower(), fn)
             with open(os.path.join(a.out, "%s.%s.txt" % (fn, tag)), "w", encoding="utf-8") as fh:
                 fh.write("HTTP %s\n" % r.status_code)
                 for k, v in r.headers.items():
                     fh.write("%s: %s\n" % (k, v))
                 fh.write("\n" + (r.text or ""))
             for f in scan_flags(r):
-                flags.setdefault(f, []).append("%s (%s)" % (p, tag))
+                flags.setdefault(f, []).append("%s (%s)" % (label.strip(), tag))
 
         if a.methods and not is_fallback(sa if ra is not None else sn):
             try:
@@ -186,7 +249,7 @@ def main():
             except Exception:
                 pass
 
-    print("\n" + "=" * 104)
+    print("\n" + "=" * 110)
     print("real routes: %d   no-auth issues: %d" % (len(set(real)), len(leaks)))
     for p in leaks:
         print("   NO-AUTH: %s" % p)

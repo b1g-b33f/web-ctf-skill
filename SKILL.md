@@ -50,6 +50,18 @@ Track auth state for the whole session: `AUTH_HEADER` (`-H "Authorization: Beare
 
 Route on what the app actually did, not on a checklist sweep. Read **one** reference file when its signal fires.
 
+**When several signals fire at once, break the tie this way:**
+
+> A parameter that makes the server **act** — fetch a URL, render a template, read a
+> path, deserialize, import a file — outranks a parameter that makes the server
+> **compute** — price, quantity, points, balance, voucher.
+
+Action params are rare and usually the planted bug; arithmetic surfaces are the most
+commonly hardened thing in a commerce lab. On CafeClub the JS mine fired `logic-race`,
+`xss-ssrf` and `json-type-confusion` simultaneously; the gift-card/points logic was
+hardened at every point (amount allowlist, redeem not racy, balances checked server
+side) and burned half the solve, while the one URL-taking endpoint was the answer.
+
 | Observed signal | Read |
 |---|---|
 | JWT in response; session cookie; reset/forgot-password flow; login oracle | `references/auth-jwt.md` |
@@ -58,7 +70,7 @@ Route on what the app actually did, not on a checklist sweep. Read **one** refer
 | Input echoed back into a rendered page or document | `references/ssti.md` |
 | Filename or path parameter; file upload accepting a filename | `references/traversal-upload.md` |
 | `/graphql` endpoint or introspection available | `references/graphql.md` |
-| "Admin reviews your submission" workflow; URL/callback param | `references/xss-ssrf.md` |
+| "Admin reviews your submission" workflow; **any param taking a URL** — import/fetch/callback/webhook/avatar-from-URL | `references/xss-ssrf.md` |
 | Payload must **execute** in client JS (DOM/reflected XSS, flag in DOM/localStorage); browser URL-parsing quirk; want a clean-tier client on an anti-bot lab | `references/browser.md` |
 | Prices, quantities, vouchers, multi-step workflows, balances | `references/logic-race.md` |
 | Any JSON body endpoint (cheap, no prerequisites) | `references/json-type-confusion.md` |
@@ -93,15 +105,36 @@ python ~/.claude/skills/ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
 # so status-code jitter can't hide real routes; scans headers + bodies for flags
 python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt
 
-# chain them
-python ~/.claude/skills/ctf/scripts/jsmine.py recon/ | grep -oE '^\s+/\S+' \
+# chain them — pipe the METHOD -> PATH section so POST routes are probed as POST
+python ~/.claude/skills/ctf/scripts/jsmine.py recon/ \
+  | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
   | python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths -
+
+# stored-response SSRF as an arbitrary read: --sweep finds internal services and
+# probes admin paths on each; or name paths directly
+python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
 ```
 
-`probe.py` verdicts: `not-a-route` (matches the calibrated fallback body), `auth-required`, and `NO-AUTH LEAK` / `NO-AUTH DATA` — the second pair is broken access control, found deliberately rather than by accident.
+`probe.py` verdicts: `not-a-route` (matches the calibrated fallback body, per method, or a framework 404), `auth-required`, and `NO-AUTH LEAK` / `NO-AUTH DATA` — the second pair is broken access control, found deliberately rather than by accident.
+
+**Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
 
 A `PostToolUse` hook (`scripts/flaghook.py`, wired in `C:\Tools\.claude\settings.json`) scans every Bash result for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
 
 ## Environment
 
 Paths, tool invocations, and wordlists are in `C:\Tools\CLAUDE.md` — that's already in context; don't re-derive it. Exploit scripts go in `C:\Tools\Python\<challenge-name>\`. Recon output goes in `/c/Tools/CTF/<challenge-name>/recon/`.
+
+Two shell rules that each cost a wasted round trip per solve:
+
+- **`cd` does not persist between Bash calls.** Save the token once to an absolute
+  path and read it absolutely every time — never rely on the working directory:
+  ```bash
+  echo "$TOKEN" > /c/Tools/CTF/<name>/token.txt
+  T=$(cat /c/Tools/CTF/<name>/token.txt)     # every subsequent call
+  ```
+- **Git Bash mangles URL-paths in argv.** `/admin/config` becomes
+  `C:/Program Files/Git/admin/config`. `ssrfget.py` un-mangles this itself; for
+  anything else prefix `MSYS_NO_PATHCONV=1` — and note that flag does *not* fix the
+  script path, so still invoke scripts as `C:/Users/.../script.py`.

