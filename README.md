@@ -37,6 +37,24 @@ python ~/.claude/skills/ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,
 python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
 ```
 
+## Consistency audit
+
+`scripts/audit.py` checks this repo against itself: every script documented, every
+reference routed to from `SKILL.md`, no doc pointing at a script that doesn't exist, the
+README's reference count and SKILL.md token figure still true, the porting table matching
+the files that actually carry host paths, no real flag / JWT / lab hostname committed, and
+every script compiling. Each check exists because that exact drift happened at least once.
+
+**Git hooks aren't versioned — install it per clone:**
+
+```bash
+printf '#!/bin/sh\nexec python "$(git rev-parse --show-toplevel)/scripts/audit.py"\n' \
+  > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+Run it directly any time with `python scripts/audit.py`. It blocks the commit on failure;
+`git commit --no-verify` overrides when a change is deliberate.
+
 ## Hook wiring
 
 The flag hook lives in **project** settings (`C:\Tools\.claude\settings.json`), so it only
