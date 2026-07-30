@@ -63,7 +63,41 @@ Base: `/c/Obsidian notes/Pentesting notes/02-AppSec/`
 | **CSPT** (client-side path traversal) | `22-Advanced Web Attacks/Bugforge Advanced Web Attacks/01-CSPT Deep Dive.md` — see `## CSPT Lab - CSPT 1` for the full chain (CSPT → reviewer-bot email rewrite → password reset → takeover) |
 | WordPress target | `19-Hacking Wordpress/01-Hacking WordPress Cheat Sheet.md` |
 
-Prior lab writeups (read only when the current target looks like a re-theme of one): `25-AppSec Boxes/`, `Bugforge NoSQL Injections/`
+## Prior lab writeups — check these FIRST on a BugForge target
+
+**Labs get re-provisioned with a fresh flag and hostname but the same bug.** On CafeClub
+(2026-07-30) the vault already held `Cafe Club-009 SSRF to JWT Secrets Disclosure.md` from
+2026-05-31: same endpoint, same internal service, *same `jwt_secret`* — only the flag and
+host had rotated. The full method was on disk the whole time.
+
+Every topic folder has a `Bugforge <topic>/` sibling next to its cheat sheet — 91 writeups
+across 13 folders (`Bugforge Web Service and API/` 18, `Bugforge Application Logic and State
+Abuse/` 11, `Bugforge SQL Injection/` 10, `Bugforge Server-side Attacks/` 9 …), plus
+`25-AppSec Boxes/` for HTB.
+
+**The identity check does not violate the one-way rule.** It is keyed on a name the *target
+itself* supplies — the `<title>`, the app name in the page header, the challenge slug — so it
+is observation-driven, not recall-driven. Run it as soon as you know what the app is called:
+
+```bash
+# filenames only, whole AppSec tree, one pass. Use the shortest distinctive STEM.
+find "/c/Obsidian notes/Pentesting notes/02-AppSec" -iname "*cafe*.md"
+```
+
+**Search the stem, not the full name.** Note filenames are inconsistently spaced: `*cafeclub*`
+returns `CafeClub SQLi UNION.md`, `CafeClub Brute Force.md` and `CafeClub Race Conditon.md`
+but **misses** `Cafe Club-009 SSRF to JWT Secrets Disclosure.md` — the one that mattered.
+`*cafe*` returns all four. Truncate before any word boundary the writer might have spaced
+or hyphenated, and accept a few extra hits.
+
+**Expect a family, not a single note.** One app is usually re-skinned across several labs and
+bug classes (CafeClub alone: SQLi, brute force, race condition, SSRF). Read the one whose
+category matches the surface you're actually on — a prior *race condition* writeup for the
+same app does not mean today's bug is a race.
+
+A hit gives you the method, **not** the answer — the flag in an old writeup is dead. Confirm
+the endpoint still behaves the same before trusting the rest, since labs do get patched
+between provisionings.
 
 ## If the map doesn't cover it
 
