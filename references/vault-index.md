@@ -1,6 +1,16 @@
-# Obsidian vault lookup — payloads for a named hypothesis
+# Notes-vault lookup — payloads for a named hypothesis
 
-The vault is 1,160 notes / 522 MB. **Never crawl it and never `grep -r` the whole thing.** Use the file map below to open at most **one or two** specific notes.
+Optional step: this reads a personal vault of prior writeups (an Obsidian tree here, but any
+folder of markdown works). Set `NOTES_VAULT` to its AppSec root; every command below falls back
+to the author's default, and if the path doesn't exist the `find` simply returns nothing and you
+carry on. **The file map further down is specific to that vault — treat it as a worked example of
+how to index your own, not as paths you are expected to have.**
+
+```bash
+export NOTES_VAULT="/path/to/your/notes/02-AppSec"
+```
+
+A mature vault runs to a thousand-plus notes. **Never crawl it and never `grep -r` the whole thing.** Use the file map below to open at most **one or two** specific notes.
 
 ## Trigger conditions — all three must hold
 
@@ -37,7 +47,7 @@ Query by observed signal ("the reset token looks like a hex timestamp", "this pa
 
 ## File map
 
-Base: `/c/Obsidian notes/Pentesting notes/02-AppSec/`
+Base: `$NOTES_VAULT/`
 
 | Hypothesis | Note |
 |---|---|
@@ -81,7 +91,7 @@ is observation-driven, not recall-driven. Run it as soon as you know what the ap
 
 ```bash
 # filenames only, whole AppSec tree, one pass. Use the shortest distinctive STEM.
-find "/c/Obsidian notes/Pentesting notes/02-AppSec" -iname "*cafe*.md"
+find "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}" -iname "*cafe*.md"
 ```
 
 **Search the stem, not the full name.** Note filenames are inconsistently spaced: `*cafeclub*`
@@ -104,13 +114,13 @@ between provisionings.
 Search **filenames only**, scoped to one folder, and open at most two hits:
 
 ```bash
-find "/c/Obsidian notes/Pentesting notes/02-AppSec/<folder>" -iname "*<keyword>*.md"
+find "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}/<folder>" -iname "*<keyword>*.md"
 ```
 
 Only if that fails, content-search a single folder — never `02-AppSec/` as a whole:
 
 ```bash
-grep -rli "<keyword>" "/c/Obsidian notes/Pentesting notes/02-AppSec/<folder>/"
+grep -rli "<keyword>" "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}/<folder>/"
 ```
 
 Adapt every payload to the target's actual framework and language. A cheat sheet is a starting point, not a verdict.

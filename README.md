@@ -69,7 +69,14 @@ python ~/.claude/skills/ctf/scripts/oob.py --name <challenge>
 3. Optionally wire the flag hook (next section).
 
 Scripts need no edits — they take paths as arguments and read `CTF_ROOT`, `SECLISTS`,
-`CLOUDFLARED` and `NGROK` from the environment.
+`CLOUDFLARED`, `NGROK` and `NOTES_VAULT` from the environment.
+
+| Variable | Purpose |
+|---|---|
+| `CTF_ROOT` | where challenge workspaces are created |
+| `SECLISTS` | SecLists tree used by the fuzzing steps |
+| `CLOUDFLARED` / `NGROK` | tunnel binaries for `oob.py` |
+| `NOTES_VAULT` | optional personal writeup vault, see below |
 
 **External dependencies.** A fresh clone does not carry these, and the sections naming them are
 dead ends without them: a [SecLists](https://github.com/danielmiessler/SecLists) tree
@@ -77,8 +84,11 @@ dead ends without them: a [SecLists](https://github.com/danielmiessler/SecLists)
 (`jwt_tool`, `sqlmap`, `ffuf`, `feroxbuster`, `nuclei`). The skill degrades gracefully — each sits
 behind a specific signal.
 
-`references/vault-index.md` additionally expects a personal notes vault of prior writeups. Point
-it at your own, or ignore that step; nothing else depends on it.
+**The notes vault is optional.** `references/vault-index.md` describes looking up your own prior
+writeups when you have a *named* hypothesis — on re-provisioned labs a past writeup is often the
+whole method. Set `NOTES_VAULT` to point at your own markdown tree; if you don't, the lookups
+return nothing and every other step is unaffected. The folder map in that file is the author's
+own index, kept as a worked example of how to organise one.
 
 ## Flag hook
 

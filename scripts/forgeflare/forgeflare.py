@@ -18,7 +18,7 @@ Usage:
     f = FF()                      # or FF("https://target")
     r = f.get("/api/whatever")
 
-First seen: WordMess-001 (2026-07-26). See the Obsidian note for the full writeup.
+First seen: WordMess-001 (2026-07-26). See the writeup for full details.
 """
 import hashlib, json, os, random, re, time
 import requests

@@ -38,11 +38,13 @@ Three rules that repeatedly decide solves:
 
 1. **Source review** (htb only) — if `/c/Tools/Source Code/<name>/` exists, read it first; it replaces most guesswork → `references/source-review.md`
 2. **Launch recon in background** — never block on it → `references/web-recon.md`
-2b. **Identity check** — as soon as the app names itself (page `<title>`, header, slug), search
-   vault *filenames* for its shortest distinctive **stem** (`*cafe*`, not `*cafeclub*` — spacing
-   varies): `find "/c/Obsidian notes/Pentesting notes/02-AppSec" -iname "*<stem>*.md"`.
-   BugForge re-provisions labs with a new flag and host but the same bug — a prior writeup is
-   the method, free. One `find`, then move on → `references/vault-index.md`
+2b. **Identity check** (skip if you keep no notes vault) — as soon as the app names itself (page
+   `<title>`, header, slug), search vault *filenames* for its shortest distinctive **stem**
+   (`*cafe*`, not `*cafeclub*` — spacing varies):
+   `find "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}" -iname "*<stem>*.md"`
+   (env is not inherited between Bash calls — always inline the fallback). BugForge re-provisions
+   labs with a new flag and host but the same bug — a prior writeup is the method, free. One
+   `find`, then move on → `references/vault-index.md`
 3. **Get an account** — login with given creds, else open registration → `references/auth-jwt.md`
 4. **Read the seeded corpus — first authenticated action, before any probing.** If the app stores
    documents/files/notes/tickets, dump them all now, in the same parallel burst as steps 5–6;
