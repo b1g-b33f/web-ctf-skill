@@ -14,8 +14,8 @@ The instant you read "an admin/operator/reviewer will open your submission", sta
 collector. It is a fixed ~30s cost and it is the only channel you can *trust*:
 
 ```bash
-python C:/Users/shawn/.claude/skills/ctf/scripts/oob.py --name <challenge>   # prints OOB_URL=
-grep -a 'HIT\|FLAG' /c/Tools/CTF/<challenge>/oob.log
+python ~/.claude/skills/ctf/scripts/oob.py --name <challenge>   # prints OOB_URL=
+grep -a 'HIT\|FLAG' $CTF_ROOT/<challenge>/oob.log
 ```
 
 **Do not adopt the app's own in-app channel as your exfil path.** Vaultly-010 had a "Preview

@@ -1,7 +1,16 @@
-# ctf skill — CTF/lab harness
+# ctf — a CTF/lab harness for Claude Code
 
-Progressive-disclosure replacement for the old monolithic `~/.claude/commands/ctf.md`
-(36 KB, ~8.9k tokens loaded on every invocation).
+A progressive-disclosure skill for working web CTF challenges and pentest labs: recon, auth,
+endpoint probing, exploitation, flag extraction. Invoke it with `/ctf`.
+
+```
+/ctf <platform> <target> <challenge-name> [username] [password]
+```
+
+`platform` is `htb` or `bugforge` (sets the flag format); `target` is a URL or IP; the workspace
+is created at `$CTF_ROOT/<challenge-name>/`.
+
+## How it is organised
 
 ```
 SKILL.md            ~3.3k tokens, always loaded: routing + order of operations
@@ -9,14 +18,23 @@ references/*.md     15 files, loaded one at a time when a signal fires
 scripts/*.py        real tooling (env-overridable paths — portable as-is)
 ```
 
-**Watch the SKILL.md figure.** It was ~1.6k tokens at creation and is the one file loaded on
-*every* invocation, so it is the budget that matters. When a lesson can live in a reference,
-put it there — SKILL.md should only carry what changes which reference you open.
+The design goal is that the always-loaded file stays small. `SKILL.md` carries only the order of
+operations and a **signal → reference** routing table; the depth for any one bug class lives in a
+reference that gets read only when the app actually shows you that signal. A payload catalogue you
+load on every invocation is a payload catalogue you pay for on every invocation.
 
-`references/browser.md` covers the in-app browser pane: a supplement to curl for the specific
-cases where JS execution or browser URL-parsing matters (DOM/reflected XSS, client-side
-traversal/redirect chains, clean-tier requests on anti-bot labs) — explicitly *not* the tool for
-admin-bot XSS, where the exploit must fire in the lab's browser and exfiltrate to a listener.
+**Watch the SKILL.md figure.** It is the one file loaded on *every* invocation, so it is the
+budget that matters. When a lesson can live in a reference, put it there — SKILL.md should only
+carry what changes which reference you open. `scripts/audit.py` fails the build if the figure in
+this README drifts from reality by more than 15%.
+
+The methodology is app-first: log in, read the app's own JavaScript and seeded documents, probe
+every endpoint, and exploit what the app's behaviour points at. Scanners are step 8, not step 1.
+
+`references/browser.md` covers driving a real browser: a supplement to curl for the cases where
+JS execution or browser URL-parsing matters (DOM/reflected XSS, client-side traversal/redirect
+chains) — explicitly *not* the tool for admin-bot XSS, where the exploit must fire in the lab's
+browser and exfiltrate to a listener you control.
 
 ## Scripts
 
@@ -26,12 +44,13 @@ admin-bot XSS, where the exploit must fire in the lab's browser and exfiltrate t
 | `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags |
 | `ssrfget.py` | Drives a stored-response SSRF as an arbitrary read: trigger, then fetch the artifact the app saved. `--sweep` finds internal services and probes admin paths on each |
 | `oob.py` | OOB collector + public tunnel in one command, for admin-bot labs — own the exfil channel instead of trusting the app's. Logs method/path/query/body/UA/`Origin`/`Referer`; answers every method with permissive CORS and a 1x1 GIF so `fetch`, `sendBeacon` and `<img>` all settle; matches flags through URL-encoding and base64 (incl. base64-wrapped JSON). cloudflared by default, `--tunnel ngrok\|none` |
-| `ctf-init.sh` | Parallel background recon: scaffolds the workspace, then headers / meta files / quick paths / feroxbuster / nuclei (htb only) at once. `CTF_ROOT` and `SECLISTS` override the Windows defaults |
-| `forgeflare/` | `forgeflare.py` (session that auto-re-clears a Forgeflare challenge, `solve_pow()`, WordPress helpers) and `ffproxy.py` (reverse proxy on 127.0.0.1:8899 that injects headers + clearance so unmodified third-party tools work) |
-| `flaghook.py` | `PostToolUse` hook — scans every Bash result for flag patterns, logs to `~/.claude/ctf-flags.log` |
+| `ctf-init.sh` | Parallel background recon: scaffolds the workspace, then headers / meta files / quick paths / feroxbuster / nuclei (htb only) at once |
+| `forgeflare/` | `forgeflare.py` (session that auto-re-clears a Forgeflare-style anti-bot challenge, `solve_pow()`, WordPress helpers) and `ffproxy.py` (reverse proxy that injects headers + clearance so unmodified third-party tools work through it) |
+| `flaghook.py` | `PostToolUse` hook — scans every Bash result for flag patterns and logs hits |
+| `audit.py` | Repo consistency check, see below |
 
 ```bash
-python ~/.claude/skills/ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
+python ~/.claude/skills/ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
 
 # pipe the METHOD -> PATH section so POST-only routes are probed as POST
 python ~/.claude/skills/ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
@@ -43,13 +62,46 @@ python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" 
 python ~/.claude/skills/ctf/scripts/oob.py --name <challenge>
 ```
 
+## Install
+
+1. Copy this directory to `~/.claude/skills/ctf/`.
+2. Set `CTF_ROOT` to where you want challenge workspaces (defaults to a Windows path, see below).
+3. Optionally wire the flag hook (next section).
+
+Scripts need no edits — they take paths as arguments and read `CTF_ROOT`, `SECLISTS`,
+`CLOUDFLARED` and `NGROK` from the environment.
+
+**External dependencies.** A fresh clone does not carry these, and the sections naming them are
+dead ends without them: a [SecLists](https://github.com/danielmiessler/SecLists) tree
+(`SECLISTS`), `cloudflared` or `ngrok` for OOB callbacks, and the CLI tools the references invoke
+(`jwt_tool`, `sqlmap`, `ffuf`, `feroxbuster`, `nuclei`). The skill degrades gracefully — each sits
+behind a specific signal.
+
+`references/vault-index.md` additionally expects a personal notes vault of prior writeups. Point
+it at your own, or ignore that step; nothing else depends on it.
+
+## Flag hook
+
+`flaghook.py` scans Bash output for flag patterns so a flag can't scroll past unnoticed. Wire it
+in **project** settings rather than user settings, so it only runs in your CTF workspace:
+
+```json
+{ "hooks": { "PostToolUse": [ { "matcher": "Bash", "hooks": [
+  { "type": "command",
+    "command": "python \"<path-to>/.claude/skills/ctf/scripts/flaghook.py\"",
+    "timeout": 15 } ] } ] } }
+```
+
+Exit 2 is intentional — it surfaces the hit back to the model. Do not wrap the command in
+`|| true`, which would swallow it.
+
 ## Consistency audit
 
-`scripts/audit.py` checks this repo against itself: every script documented, every
-reference routed to from `SKILL.md`, no doc pointing at a script that doesn't exist, the
-README's reference count and SKILL.md token figure still true, the porting table matching
-the files that actually carry host paths, no real flag / JWT / lab hostname committed, and
-every script compiling. Each check exists because that exact drift happened at least once.
+`scripts/audit.py` checks the repo against itself: every script documented, every reference
+routed to from `SKILL.md`, no doc pointing at a script that doesn't exist, this README's
+reference count and SKILL.md token figure still true, the porting table matching the files that
+actually carry host paths, no real flag / JWT / lab hostname committed, and every script
+compiling. Each check exists because that exact drift happened at least once.
 
 **Git hooks aren't versioned — install it per clone:**
 
@@ -61,58 +113,25 @@ printf '#!/bin/sh\nexec python "$(git rev-parse --show-toplevel)/scripts/audit.p
 Run it directly any time with `python scripts/audit.py`. It blocks the commit on failure;
 `git commit --no-verify` overrides when a change is deliberate.
 
-## Hook wiring
+## Porting to another platform
 
-The flag hook lives in **project** settings (`C:\Tools\.claude\settings.json`), so it only
-runs in the tools/CTF workspace rather than on every Bash call in every project:
+The scripts are portable as-is. These docs contain host paths from the environment they were
+written in, and need repointing if you don't share that layout:
 
-```json
-{ "hooks": { "PostToolUse": [ { "matcher": "Bash", "hooks": [
-  { "type": "command",
-    "command": "python \"C:/Users/shawn/.claude/skills/ctf/scripts/flaghook.py\"",
-    "timeout": 15 } ] } ] } }
-```
+| File | What needs repointing |
+|---|---|
+| `SKILL.md` | workspace and source-code roots; the Git-Bash argv-mangling note is Windows-only and can be dropped |
+| `references/auth-jwt.md` | `jwt_tool.py`, SecLists password lists |
+| `references/injection.md` | `sqlmap.py` |
+| `references/source-review.md` | local source-code root |
+| `references/traversal-upload.md` | workspace root |
+| `references/vault-index.md` | notes-vault root (**and the vault itself must be present**) |
+| `references/web-recon.md` | SecLists wordlists (or set `SECLISTS`) |
+| `references/xss-ssrf.md` | `cloudflared` binary |
 
-Exit 2 is intentional — it surfaces the hit back to the model. Do not wrap the command
-in `|| true`, which would swallow it.
+## Contributing
 
-## Porting to another machine (Kali VM)
-
-1. Copy this directory to `~/.claude/skills/ctf/`.
-2. `scripts/*.py` need no changes — they take paths as arguments and use `expanduser`.
-   (`ssrfget.py` contains Windows Git-Bash paths only as argv-demangling *fallbacks*;
-   they simply never match on Linux.)
-3. Fix tool paths in these **nine** files, which reference the Windows layout:
-
-   | File | What needs repointing |
-   |---|---|
-   | `SKILL.md` | `/c/Tools/CTF/`, `/c/Tools/Source Code/`; the Git-Bash argv-mangling note is Windows-only and can be dropped |
-   | `references/auth-jwt.md` | `jwt_tool.py`, SecLists password lists |
-   | `references/injection.md` | `sqlmap.py` |
-   | `references/source-review.md` | `/c/Tools/Source Code/` |
-   | `references/traversal-upload.md` | `C:/Tools/CTF/` |
-   | `references/vault-index.md` | Obsidian vault root (**and the vault itself must be present**) |
-   | `references/web-recon.md` | SecLists wordlists (`ctf-init.sh` is bundled now — set `CTF_ROOT`/`SECLISTS` instead of editing it) |
-   | `references/xss-ssrf.md` | `cloudflared.exe` |
-
-4. Re-wire the hook in that machine's project settings with the new script path.
-5. **Remaining external dependencies** — a fresh clone does not carry these: the **SecLists
-   tree** (`SECLISTS` env var), the **Obsidian vault**, and the tools in `C:\Tools\CLAUDE.md`
-   (jwt_tool, sqlmap, cloudflared). The skill degrades gracefully without them — each sits
-   behind a specific signal — but the sections naming them will be dead ends.
-   `ctf-init.sh` and `forgeflare/` used to be on this list; they are bundled in `scripts/` now.
-
-## Provenance
-
-This skill replaced a 937-line / 36 KB monolithic command that loaded ~8.9k tokens on every
-invocation. That command was retired on 2026-07-30 once the skill had been proven on live
-labs; `archive/ctf-legacy.md` is the verbatim copy.
-
-**It is history, not a rollback path.** The `/ctf-legacy` slash command no longer exists, and
-the archive is not maintained — it references `/c/Tools/ctf-init.sh` and
-`/c/Tools/Python/forgeflare/`, which have moved into `scripts/`. Read it to recover a payload
-or a phrasing the decomposition dropped; don't run it.
-
-Every section of it maps onto a reference: IDOR/mass-assignment → `access-control.md`,
-SQLi → `injection.md`, SSTI → `ssti.md`, traversal → `traversal-upload.md`,
-JWT → `auth-jwt.md`, JS harvest and probing → `web-recon.md`.
+The references are deliberately written as *decision rules with the evidence behind them*, not as
+payload dumps — each one exists because a specific failure cost real time. If you add a lesson,
+put it in the reference its signal routes to, keep `SKILL.md` unchanged unless the lesson changes
+*which* reference you open, and make sure `python scripts/audit.py` passes.
