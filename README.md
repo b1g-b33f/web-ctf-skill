@@ -1,4 +1,4 @@
-# ctf — a web CTF harness for Claude Code
+# web-ctf — a web CTF harness for Claude Code
 
 A progressive-disclosure skill for challenges against a **running web application**: recon, auth,
 endpoint probing, exploitation, flag extraction. Invoke it with `/web-ctf`.
@@ -11,10 +11,15 @@ endpoint probing, exploitation, flag extraction. Invoke it with `/web-ctf`.
 optional and only sets the expected flag wrapper (`htb` → `HTB{}`, `bugforge` → `bug{}`,
 `picoctf` → `picoCTF{}`, otherwise `flag{}`) — any platform works, including none.
 
-**Scope: web only.** The bug classes it routes to are broken access control, injection, SSTI,
-path traversal and upload, SSRF, XSS with an admin bot, CORS, GraphQL, JWT and session flaws,
-business logic and race conditions, and anti-bot layers. It is not a crypto, pwn, forensics or
-reversing playbook, and the skill description says so, so it won't hijack those requests.
+**Scope: web only, deliberately.** The bug classes it routes to are broken access control,
+injection, SSTI, path traversal and upload, SSRF, XSS with an admin bot, CORS, GraphQL, JWT and
+session flaws, business logic and race conditions, and anti-bot layers.
+
+It is not a crypto, pwn, forensics or reversing playbook, and its skill description says so
+explicitly, so it won't hijack those requests — leaving room for a companion skill to own
+full-scope boxes (enumeration, privesc, pivoting) without either one diluting the other. Keeping
+the always-loaded routing table narrow is what makes it fast; a general-purpose CTF skill is a
+different shape, not a superset of this one.
 
 ## How it is organised
 
