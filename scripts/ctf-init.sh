@@ -126,7 +126,7 @@ JOB_QUICK=$!
 ) &
 JOB_FEROX=$!
 
-# ── Job 5: nuclei (HTB only) ─────────────────────────────────────────────────
+# ── Job 5: nuclei (skipped on bugforge) ─────────────────────────────────────────────────
 if [[ "$PLATFORM" != "bugforge" ]]; then
   (
     echo "[job:nuclei] starting"

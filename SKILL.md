@@ -1,15 +1,20 @@
 ---
 name: ctf
-description: CTF and lab methodology for web, crypto, pwn, forensics and reversing challenges. Use when working an HTB box, a BugForge lab, or any CTF challenge — recon, auth, endpoint probing, exploitation, and flag extraction. Also use when the user gives a target URL/IP and asks to solve, test, or find the flag.
+description: Web CTF and web-application lab methodology — recon, auth, endpoint probing, exploitation and flag extraction against a running web app, on any platform (HTB, BugForge, picoCTF, PortSwigger-style labs, self-hosted, or an unnamed target URL). Covers broken access control, injection, SSTI, path traversal and upload, SSRF, XSS with an admin bot, CORS, GraphQL, JWT and session flaws, business logic and race conditions, and anti-bot layers. Use when given a web target and asked to solve it, test it, or find the flag. Not for crypto, pwn, forensics or reversing.
 user-invocable: true
 ---
 
-# /ctf — CTF challenge methodology
+# /ctf — web CTF & web-app lab methodology
 
-Arguments: `$ARGUMENTS` → `/ctf <platform> <target> <challenge-name> [username] [password]`
+For challenges against a **running web application**, on any platform. Not a crypto/pwn/forensics/
+reversing playbook — if the target isn't a web app, this is the wrong file.
 
-- `platform` — `htb` (default) or `bugforge`. Sets flag format: htb → `HTB{}`, bugforge → `bug{}`, else `flag{}`
-- `target` — IP, IP:port, or URL (prepend `http://` if missing)
+Arguments: `$ARGUMENTS` → `/ctf [platform] <target> [challenge-name] [username] [password]`
+
+- `platform` — optional, any name. Sets the expected flag wrapper: `htb` → `HTB{}`,
+  `bugforge` → `bug{}`, `picoctf` → `picoCTF{}`, otherwise `flag{}` — and whatever the brief
+  states beats all of these. Unknown or omitted is fine; match on `\w+\{.*\}` and move on.
+- `target` — URL, IP, or IP:port (prepend `http://` if missing)
 - `challenge-name` — sanitize to lowercase-hyphens; workspace is `/c/Tools/CTF/<challenge-name>/`
 
 If args are missing, infer from the conversation. Don't stop to ask for a challenge name — derive one from the hostname.
@@ -36,15 +41,15 @@ Three rules that repeatedly decide solves:
 
 ## Order of operations
 
-1. **Source review** (htb only) — if `/c/Tools/Source Code/<name>/` exists, read it first; it replaces most guesswork → `references/source-review.md`
+1. **Source review** — if the challenge ships source (a download, a repo, `/c/Tools/Source Code/<name>/`), read it first; it replaces most guesswork → `references/source-review.md`
 2. **Launch recon in background** — never block on it → `references/web-recon.md`
 2b. **Identity check** (skip if you keep no notes vault) — as soon as the app names itself (page
    `<title>`, header, slug), search vault *filenames* for its shortest distinctive **stem**
    (`*cafe*`, not `*cafeclub*` — spacing varies):
    `find "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}" -iname "*<stem>*.md"`
-   (env is not inherited between Bash calls — always inline the fallback). BugForge re-provisions
-   labs with a new flag and host but the same bug — a prior writeup is the method, free. One
-   `find`, then move on → `references/vault-index.md`
+   (env is not inherited between Bash calls — always inline the fallback). Hosted labs get
+   re-provisioned with a new flag and host but the same bug (BugForge especially) — a prior
+   writeup is the method, free. One `find`, then move on → `references/vault-index.md`
 3. **Get an account** — login with given creds, else open registration → `references/auth-jwt.md`
 4. **Read the seeded corpus — first authenticated action, before any probing.** If the app stores
    documents/files/notes/tickets, dump them all now, in the same parallel burst as steps 5–6;

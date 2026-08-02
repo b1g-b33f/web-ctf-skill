@@ -1,14 +1,20 @@
-# ctf — a CTF/lab harness for Claude Code
+# ctf — a web CTF harness for Claude Code
 
-A progressive-disclosure skill for working web CTF challenges and pentest labs: recon, auth,
+A progressive-disclosure skill for challenges against a **running web application**: recon, auth,
 endpoint probing, exploitation, flag extraction. Invoke it with `/ctf`.
 
 ```
-/ctf <platform> <target> <challenge-name> [username] [password]
+/ctf [platform] <target> [challenge-name] [username] [password]
 ```
 
-`platform` is `htb` or `bugforge` (sets the flag format); `target` is a URL or IP; the workspace
-is created at `$CTF_ROOT/<challenge-name>/`.
+`target` is a URL or IP; the workspace is created at `$CTF_ROOT/<challenge-name>/`. `platform` is
+optional and only sets the expected flag wrapper (`htb` → `HTB{}`, `bugforge` → `bug{}`,
+`picoctf` → `picoCTF{}`, otherwise `flag{}`) — any platform works, including none.
+
+**Scope: web only.** The bug classes it routes to are broken access control, injection, SSTI,
+path traversal and upload, SSRF, XSS with an admin bot, CORS, GraphQL, JWT and session flaws,
+business logic and race conditions, and anti-bot layers. It is not a crypto, pwn, forensics or
+reversing playbook, and the skill description says so, so it won't hijack those requests.
 
 ## How it is organised
 
@@ -44,7 +50,7 @@ browser and exfiltrate to a listener you control.
 | `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags |
 | `ssrfget.py` | Drives a stored-response SSRF as an arbitrary read: trigger, then fetch the artifact the app saved. `--sweep` finds internal services and probes admin paths on each |
 | `oob.py` | OOB collector + public tunnel in one command, for admin-bot labs — own the exfil channel instead of trusting the app's. Logs method/path/query/body/UA/`Origin`/`Referer`; answers every method with permissive CORS and a 1x1 GIF so `fetch`, `sendBeacon` and `<img>` all settle; matches flags through URL-encoding and base64 (incl. base64-wrapped JSON). cloudflared by default, `--tunnel ngrok\|none` |
-| `ctf-init.sh` | Parallel background recon: scaffolds the workspace, then headers / meta files / quick paths / feroxbuster / nuclei (htb only) at once |
+| `ctf-init.sh` | Parallel background recon: scaffolds the workspace, then headers / meta files / quick paths / feroxbuster / nuclei at once |
 | `forgeflare/` | `forgeflare.py` (session that auto-re-clears a Forgeflare-style anti-bot challenge, `solve_pow()`, WordPress helpers) and `ffproxy.py` (reverse proxy that injects headers + clearance so unmodified third-party tools work through it) |
 | `flaghook.py` | `PostToolUse` hook — scans every Bash result for flag patterns and logs hits |
 | `audit.py` | Repo consistency check, see below |

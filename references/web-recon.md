@@ -10,7 +10,7 @@ nohup bash ~/.claude/skills/ctf/scripts/ctf-init.sh <target> <challenge-name> <p
   > /c/Tools/CTF/<challenge-name>/recon/_init.log 2>&1 &
 ```
 
-Produces in `recon/`: `headers.txt`, `root.html`, `meta_hits.txt`, `quickcheck_hits.txt`, `ferox.txt`, `nuclei.txt` (htb only).
+Produces in `recon/`: `headers.txt`, `root.html`, `meta_hits.txt`, `quickcheck_hits.txt`, `ferox.txt`, `nuclei.txt` (skipped on bugforge, whose labs are anti-bot instrumented).
 
 When you check back:
 - `Server` / `X-Powered-By` → framework. **Treat as untrusted** — some labs rotate it per response to poison fingerprinting.

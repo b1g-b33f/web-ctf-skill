@@ -1,6 +1,8 @@
-# Source code review (HTB only)
+# Source code review
 
-If platform is `htb`, check for source before anything else:
+Whenever the challenge ships source — an HTB box download, a provided zip or repo, a
+`.git` directory left exposed on the target — read it before anything else. Check for it
+first:
 
 ```bash
 ls "/c/Tools/Source Code/<challenge-name>/" 2>/dev/null || echo "no source"
