@@ -45,6 +45,30 @@ The vault supplies **payloads for a hypothesis the target already suggested.** I
 
 Query by observed signal ("the reset token looks like a hex timestamp", "this param accepts a nested object"), never by "what could be wrong with a flashcard app." Recall competes with observation: on Tanuki, a remembered homoglyph-collision technique pulled 16 wasted requests on a lab where nothing indicated username-based authorization. If a note describes a technique the target shows no evidence for, close it.
 
+## App families — when the identity check returns *several* notes
+
+One note for the app = the same challenge re-provisioned; the method transfers and you are
+nearly done. **Several notes for the same app = a lab family**: one codebase, numbered variants,
+a *different* planted bug in each. Platforms reuse a good app shell — Cheesy Does It alone has
+-003, -004, -007, -008, -009, -010 and -011 spanning business logic, SQLi, reset flows, XSS,
+IDOR and JWT.
+
+In family mode the prior notes are still worth the one `find`, but for different reasons:
+
+- **Take:** the endpoint map, request shapes, and — most valuable — the list of surfaces
+  *already hardened*. Cheesy-004's `unit_price` tampering was dead in -007, killed by a
+  server-side recalculation the note predicted exactly.
+- **Do not take:** the bug. Matching the closest structural variant and expecting its bug is
+  the trap. On Cheesy-007 the route set matched -004's three-step checkout precisely, so the
+  payment flow got ~15 tool calls; the checkout *did* yield a real logic bug (unfloored negative
+  `quantity`, 10 pizzas for $0.01) and it was **not** the flag, which sat behind a weak JWT
+  secret the whole time.
+- Prior bug classes for the family are mild **negative** evidence — this instance is a variant
+  the vault doesn't have yet, so it is likelier to be a class the notes *don't* cover.
+
+Practical consequence: in family mode, run the cheap class-independent checks (JWT crack,
+no-auth probe of every route) **in parallel with** the app-specific hypothesis, never after it.
+
 ## File map
 
 Base: `$NOTES_VAULT/`

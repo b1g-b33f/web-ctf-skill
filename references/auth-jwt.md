@@ -38,17 +38,77 @@ python /c/Tools/jwt_tool/jwt_tool.py <token>
 
 ## 2. JWT fast-track
 
+**Run the whole cheap surface in the foreground the moment you hold a token.** Do not background
+it and do not defer it — measured on this box:
+
+| Wordlist | Lines | Full scan, no hit |
+|---|---|---|
+| `SecLists/Passwords/scraped-JWT-secrets.txt` | 104k | **0.8s** |
+| `rockyou.txt` | 14.3M | **38.7s** |
+
+0.8s is cheaper than one HTTP round-trip to the lab, so a background job here is pure overhead —
+the completion notification costs more attention than the job costs time. `scraped-JWT-secrets`
+is also the *better* list: weak JWT secrets are dev placeholders (`secret`, `your-256-bit-secret`,
+`changeme`), not human passwords. `secret` sits at line 40 of it and line 42 of rockyou.
+
 ```bash
-python /c/Tools/jwt_tool/jwt_tool.py "$TOKEN" -X a   # alg:none
-python /c/Tools/jwt_tool/jwt_tool.py "$TOKEN" -C -d /c/Tools/SecLists/Passwords/Common-Credentials/xato-net-10-million-passwords-10000.txt
+python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" \
+  --base <target> --test /api/admin/stats
 ```
 
-If it cracks or alg:none lands, forge with `role=admin`, `isAdmin=true`, `userId=1`:
-```bash
-python /c/Tools/jwt_tool/jwt_tool.py "$TOKEN" -T -S hs256 -p "<cracked-secret>"
+One call does: decode → dictionary-crack → mint `alg:none` × 4 → mint privilege-escalated and
+id-swapped forgeries → fire all of them at a route that currently refuses you → scan status,
+headers and body for a flag, and print the winning token. ~1s total.
+
+Escalate to rockyou (**worth backgrounding at 39s**) only if the 104k list misses *and* JWT is
+still a live hypothesis. Its marginal yield is low: if 104k dev secrets miss, the secret is
+usually random.
+
+On Cheesy-007 the secret was the literal string `secret`. It cracked instantly — but only after
+~15 tool calls had gone into the app's commerce logic first, because the crack had been filed as
+a fallback rather than a step-3 reflex.
+
+### Reading the output
+
+`jwtquick` prints a `forged:resign-only` candidate as a **control** — same claims, re-signed with
+the cracked secret. If that one also succeeds, the win came from re-signing (the server was
+rejecting your original token for an unrelated reason), not from privilege escalation. Expect it
+to stay at the baseline status.
+
+### Forging by hand
+
+`jwt_tool -T` prompts interactively for which claim to edit, which is awkward to drive
+non-interactively. Once you have the secret, mint tokens directly:
+
+```python
+import hmac, hashlib, base64, json, time
+b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=")
+def sign(payload, secret="secret"):
+    h = b64(json.dumps({"alg":"HS256","typ":"JWT"}, separators=(",",":")).encode())
+    p = b64(json.dumps(payload, separators=(",",":")).encode())
+    s = b64(hmac.new(secret.encode(), h+b"."+p, hashlib.sha256).digest())
+    return (h+b"."+p+b"."+s).decode()
+print(sign({"id":1,"username":"admin","role":"admin","iat":int(time.time())}))
 ```
 
-**Timebox this.** A full rockyou run (14M) plus a targeted app-themed list is ~5 minutes and usually proves the secret is random. If both fail, mark JWT-forge as killed in `WORKLOG.md` and move on — do not return to it without new information (a leaked secret, a JWKS write primitive). Also verify the verifier actually rejects unsigned tokens (`alg: none/None/NONE/nOnE` × empty/garbage signature) before concluding.
+Keep every claim from the original token and change only the privilege one (`role`, `isAdmin`,
+`userId`) — a missing `iat`/`exp`/`sub` the verifier expects will fail for the wrong reason.
+
+### Validate the forgery against the target, never against `/me`
+
+**Test a forged token on the 403 route you actually want.** `/api/verify-token`, `/api/me` and
+`/api/profile` commonly re-read the user row from the DB and echo **stored** state, so they
+report your real role no matter how good the forgery is. On Cheesy-007 `/api/verify-token`
+returned `"role":"user"` for a token that was simultaneously opening every `/api/admin/*` route —
+believing it would have killed a live, winning vector.
+
+Corollary: the forged identity usually doesn't need to exist or match. A token minted for an
+unrelated user id with `role:"admin"` worked identically; only the authorizing claim mattered.
+
+**If it doesn't crack**, mark JWT-forge as killed in `WORKLOG.md` and move on — do not return
+without new information (a leaked secret, a JWKS write primitive). Also verify the verifier
+actually rejects unsigned tokens (`alg: none/None/NONE/nOnE` × empty/garbage signature) before
+concluding.
 
 ## 3. JWT deep-dive (only with a new primitive)
 

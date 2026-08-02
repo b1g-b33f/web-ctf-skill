@@ -51,6 +51,7 @@ browser and exfiltrate to a listener you control.
 
 | Script | Purpose |
 |---|---|
+| `jwtquick.py` | The whole cheap JWT surface in one ~1s foreground call: decode, dictionary-crack the HS256 secret (104k JWT-specific secrets, 0.8s worst case), mint `alg:none` ×4 plus privilege-escalated and id-swapped forgeries, fire them all at a route that refuses you, scan status/headers/body for a flag. Emits a re-sign-only control so a win is attributable to escalation rather than to re-signing |
 | `jsmine.py` | Bundle → routes (incl. query-string and `.concat()` forms), method map, router table, secrets, comments |
 | `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags |
 | `ssrfget.py` | Drives a stored-response SSRF as an arbitrary read: trigger, then fetch the artifact the app saved. `--sweep` finds internal services and probes admin paths on each |
@@ -61,6 +62,9 @@ browser and exfiltrate to a listener you control.
 | `audit.py` | Repo consistency check, see below |
 
 ```bash
+# run this the moment you hold a token — foreground, ~1s, not a background job
+python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
+
 python ~/.claude/skills/web-ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
 
 # pipe the METHOD -> PATH section so POST-only routes are probed as POST

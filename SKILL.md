@@ -34,7 +34,7 @@ substitute a generic playbook. Details and the failure it's drawn from: `referen
 
 Two rules that repeatedly decide solves:
 
-- **Use `curl -si` always.** Flags land in response *headers* (`X-Flag` on an otherwise-normal 403). Body-only checks make live endpoints look dead — and so does status-only reading: a 401/403 is never a reason to skip the headers (`references/cors.md`).
+- **Use `curl -si` always.** Flags land in response *headers* (`X-Flag` on an otherwise-normal 403). Body-only checks make live endpoints look dead — and so does status-only reading: a 401/403 is never a reason to skip the headers (`references/cors.md`). A **200 whose body is exactly what you expected** needs the same treatment — on Cheesy-007 the flag rode `X-Flag` on a normal-looking `/api/admin/stats` 200.
 - **Never trust status codes for discovery.** Labs jitter them. Discriminate on body size + content-type. If a fuzzer reports nothing, check that it isn't filtering jittered 2xx (`ffuf` needs `-mc all` plus a size filter). If it reports *everything*, the filter didn't apply — `ffuf -fs` takes comma-separated values, **not ranges**. Prefer a body regex: `-fr 'could not be found'`.
 
 ---
@@ -49,8 +49,13 @@ Two rules that repeatedly decide solves:
    `find "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}" -iname "*<stem>*.md"`
    (env is not inherited between Bash calls — always inline the fallback). Hosted labs get
    re-provisioned with a new flag and host but the same bug (BugForge especially) — a prior
-   writeup is the method, free. One `find`, then move on → `references/vault-index.md`
+   writeup is the method, free. **Read the hit count first:** *one* note = the same challenge
+   re-provisioned, method transfers. *Several* = an app **family**, and only the endpoint map
+   and already-hardened list transfer, never the bug. One `find`, then move on
+   → `references/vault-index.md`
 3. **Get an account** — login with given creds, else open registration → `references/auth-jwt.md`
+   **Hold a JWT? Run `jwtquick.py` foreground — ~1s, not a background job.** Crack + alg:none
+   + forge + fire at a refusing route, one call. Never defer it → `references/auth-jwt.md` §2
 4. **Read the seeded corpus — first authenticated action, before any probing.** If the app stores
    documents/files/notes/tickets, dump them all now, in the same parallel burst as steps 5–6;
    labs plant the brief in one of them (Vaultly-010 named its own vulnerable endpoint there).
@@ -143,6 +148,10 @@ once with an `alive` beacon first, and change the channel rather than extending 
 Use these instead of retyping one-liners — they encode fixes for mistakes that have cost real time.
 
 ```bash
+# the whole cheap JWT surface in ~1s, FOREGROUND: crack + alg:none + forge + fire at a
+# refusing route + scan headers/body for the flag. Run it the moment you hold a token.
+python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
+
 # mine a bundle: routes (incl. query strings + .concat), methods, router, secrets, comments
 python ~/.claude/skills/web-ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
 
