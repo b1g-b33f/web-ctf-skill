@@ -6,7 +6,7 @@ Feroxbuster and nuclei take 1–5 minutes. **Do not block.** Launch and go strai
 
 ```bash
 mkdir -p /c/Tools/CTF/<challenge-name>/{recon,exploits,loot}
-nohup bash ~/.claude/skills/ctf/scripts/ctf-init.sh <target> <challenge-name> <platform> \
+nohup bash ~/.claude/skills/web-ctf/scripts/ctf-init.sh <target> <challenge-name> <platform> \
   > /c/Tools/CTF/<challenge-name>/recon/_init.log 2>&1 &
 ```
 
@@ -30,7 +30,7 @@ curl -sk <target>/ $AUTH_HEADER -o /c/Tools/CTF/<challenge-name>/recon/root_auth
 Extract script srcs and download every bundle, then **use the script** — it already handles query-string routes, `.concat()` route building, minified axios aliases, and the router table:
 
 ```bash
-python ~/.claude/skills/ctf/scripts/jsmine.py /c/Tools/CTF/<challenge-name>/recon/
+python ~/.claude/skills/web-ctf/scripts/jsmine.py /c/Tools/CTF/<challenge-name>/recon/
 ```
 
 The inline version below is the fallback if the script is unavailable:
@@ -91,9 +91,9 @@ Hit everything found, **with `$AUTH_HEADER` and again without it.** Use the scri
 # feed it jsmine's METHOD -> PATH section, not just the path list: probing a
 # POST-only route with GET returns the SPA index, which matches the 404
 # calibration exactly and reports not-a-route
-python ~/.claude/skills/ctf/scripts/jsmine.py recon/ \
+python ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
   | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
-  | python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" \
+  | python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" \
       --paths - --methods --out recon/probe
 ```
 

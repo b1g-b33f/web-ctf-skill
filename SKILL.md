@@ -1,15 +1,15 @@
 ---
-name: ctf
+name: web-ctf
 description: Web CTF and web-application lab methodology — recon, auth, endpoint probing, exploitation and flag extraction against a running web app, on any platform (HTB, BugForge, picoCTF, PortSwigger-style labs, self-hosted, or an unnamed target URL). Covers broken access control, injection, SSTI, path traversal and upload, SSRF, XSS with an admin bot, CORS, GraphQL, JWT and session flaws, business logic and race conditions, and anti-bot layers. Use when given a web target and asked to solve it, test it, or find the flag. Not for crypto, pwn, forensics or reversing.
 user-invocable: true
 ---
 
-# /ctf — web CTF & web-app lab methodology
+# /web-ctf — web CTF & web-app lab methodology
 
 For challenges against a **running web application**, on any platform. Not a crypto/pwn/forensics/
 reversing playbook — if the target isn't a web app, this is the wrong file.
 
-Arguments: `$ARGUMENTS` → `/ctf [platform] <target> [challenge-name] [username] [password]`
+Arguments: `$ARGUMENTS` → `/web-ctf [platform] <target> [challenge-name] [username] [password]`
 
 - `platform` — optional, any name. Sets the expected flag wrapper: `htb` → `HTB{}`,
   `bugforge` → `bug{}`, `picoctf` → `picoCTF{}`, otherwise `flag{}` — and whatever the brief
@@ -32,7 +32,7 @@ names something specific (a CVE id, "wp2shell", a technique by name), search for
 that writeup *before* probing. Don't re-derive the mechanism from a PoC script and don't
 substitute a generic playbook. Details and the failure it's drawn from: `references/vault-index.md`.
 
-Three rules that repeatedly decide solves:
+Two rules that repeatedly decide solves:
 
 - **Use `curl -si` always.** Flags land in response *headers* (`X-Flag` on an otherwise-normal 403). Body-only checks make live endpoints look dead — and so does status-only reading: a 401/403 is never a reason to skip the headers (`references/cors.md`).
 - **Never trust status codes for discovery.** Labs jitter them. Discriminate on body size + content-type. If a fuzzer reports nothing, check that it isn't filtering jittered 2xx (`ffuf` needs `-mc all` plus a size filter). If it reports *everything*, the filter didn't apply — `ffuf -fs` takes comma-separated values, **not ranges**. Prefer a body regex: `-fr 'could not be found'`.
@@ -144,25 +144,25 @@ Use these instead of retyping one-liners — they encode fixes for mistakes that
 
 ```bash
 # mine a bundle: routes (incl. query strings + .concat), methods, router, secrets, comments
-python ~/.claude/skills/ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
+python ~/.claude/skills/web-ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
 
 # probe every endpoint with auth AND without, auto-calibrating the not-found body
 # so status-code jitter can't hide real routes; scans headers + bodies for flags
-python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt
+python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt
 
 # chain them — pipe the METHOD -> PATH section so POST routes are probed as POST
-python ~/.claude/skills/ctf/scripts/jsmine.py recon/ \
+python ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
   | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
-  | python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths -
+  | python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths -
 
 # stored-response SSRF as an arbitrary read: --sweep finds internal services and
 # probes admin paths on each; or name paths directly
-python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
-python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
+python ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+python ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
 
 # OOB collector + public tunnel in one command. Run it (run_in_background) the moment a lab
 # mentions an admin/operator/reviewer opening your submission — BEFORE the first payload.
-python ~/.claude/skills/ctf/scripts/oob.py --name <challenge-name>   # prints OOB_URL=
+python ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge-name>   # prints OOB_URL=
 grep -a 'HIT\|FLAG' /c/Tools/CTF/<challenge-name>/oob.log
 ```
 

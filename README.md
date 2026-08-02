@@ -1,10 +1,10 @@
 # ctf — a web CTF harness for Claude Code
 
 A progressive-disclosure skill for challenges against a **running web application**: recon, auth,
-endpoint probing, exploitation, flag extraction. Invoke it with `/ctf`.
+endpoint probing, exploitation, flag extraction. Invoke it with `/web-ctf`.
 
 ```
-/ctf [platform] <target> [challenge-name] [username] [password]
+/web-ctf [platform] <target> [challenge-name] [username] [password]
 ```
 
 `target` is a URL or IP; the workspace is created at `$CTF_ROOT/<challenge-name>/`. `platform` is
@@ -56,21 +56,21 @@ browser and exfiltrate to a listener you control.
 | `audit.py` | Repo consistency check, see below |
 
 ```bash
-python ~/.claude/skills/ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
+python ~/.claude/skills/web-ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
 
 # pipe the METHOD -> PATH section so POST-only routes are probed as POST
-python ~/.claude/skills/ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
-  | python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths - --methods
+python ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
+  | python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths - --methods
 
-python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+python ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
 
 # start this BEFORE the first payload on any admin-bot lab
-python ~/.claude/skills/ctf/scripts/oob.py --name <challenge>
+python ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>
 ```
 
 ## Install
 
-1. Copy this directory to `~/.claude/skills/ctf/`.
+1. Copy this directory to `~/.claude/skills/web-ctf/`.
 2. Set `CTF_ROOT` to where you want challenge workspaces (defaults to a Windows path, see below).
 3. Optionally wire the flag hook (next section).
 
@@ -121,7 +121,7 @@ in **project** settings rather than user settings, so it only runs in your CTF w
 ```json
 { "hooks": { "PostToolUse": [ { "matcher": "Bash", "hooks": [
   { "type": "command",
-    "command": "python \"<path-to>/.claude/skills/ctf/scripts/flaghook.py\"",
+    "command": "python \"<path-to>/.claude/skills/web-ctf/scripts/flaghook.py\"",
     "timeout": 15 } ] } ] } }
 ```
 

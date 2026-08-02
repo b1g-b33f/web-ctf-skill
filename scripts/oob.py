@@ -6,7 +6,7 @@ and two long blind polls on it (3 min + 5 min) were spent before an external col
 was built. Building the collector takes ~40s. On any admin-bot lab, do it BEFORE the
 first payload, not after the in-app channel disappoints.
 
-    python ~/.claude/skills/ctf/scripts/oob.py --name <challenge>
+    python ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>
 
 Prints `OOB_URL=<https://...>` on stdout as soon as the tunnel is up, then serves
 forever. Run it with run_in_background:true and grep the log:
