@@ -78,6 +78,23 @@ Scripts need no edits — they take paths as arguments and read `CTF_ROOT`, `SEC
 | `CLOUDFLARED` / `NGROK` | tunnel binaries for `oob.py` |
 | `NOTES_VAULT` | optional personal writeup vault, see below |
 
+### On Windows, run it from Git Bash
+
+The Python tooling is cross-platform and runs from any shell, but the shell snippets throughout
+`SKILL.md` and the references are POSIX — `${VAR:-default}` fallbacks, `seq`, `sed -n`, `grep -a`,
+pipelines into python — and `ctf-init.sh` is a bash script. Several default paths also use the
+MSYS `/c/...` form, which only resolves under Git Bash. Install
+[Git for Windows](https://gitforwindows.org/) and point the agent's shell at it.
+
+Two Windows-specific gotchas worth knowing up front:
+
+- **Windows PowerShell 5.1 aliases `curl` to `Invoke-WebRequest`**, which takes different flags
+  and different quoting. Every recon snippet here is `curl -si`, so in PowerShell they fail or
+  behave differently rather than erroring cleanly. (PowerShell 7+ dropped the alias.)
+- **Git Bash rewrites URL-looking arguments**: `/admin/config` becomes
+  `C:/Program Files/Git/admin/config`. Prefix `MSYS_NO_PATHCONV=1` for those calls — see the
+  Environment section of `SKILL.md`.
+
 **External dependencies.** A fresh clone does not carry these, and the sections naming them are
 dead ends without them: a [SecLists](https://github.com/danielmiessler/SecLists) tree
 (`SECLISTS`), `cloudflared` or `ngrok` for OOB callbacks, and the CLI tools the references invoke
@@ -125,8 +142,9 @@ Run it directly any time with `python scripts/audit.py`. It blocks the commit on
 
 ## Porting to another platform
 
-The scripts are portable as-is. These docs contain host paths from the environment they were
-written in, and need repointing if you don't share that layout:
+The scripts are portable as-is, and the shell snippets assume a POSIX shell — which on Linux and
+macOS is the default, and on Windows means Git Bash (see above). These docs contain host paths
+from the environment they were written in, and need repointing if you don't share that layout:
 
 | File | What needs repointing |
 |---|---|
