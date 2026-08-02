@@ -4,9 +4,9 @@ Progressive-disclosure replacement for the old monolithic `~/.claude/commands/ct
 (36 KB, ~8.9k tokens loaded on every invocation).
 
 ```
-SKILL.md            ~2.7k tokens, always loaded: routing + order of operations
-references/*.md     14 files, loaded one at a time when a signal fires
-scripts/*.py        real tooling (no hardcoded paths — portable as-is)
+SKILL.md            ~3.3k tokens, always loaded: routing + order of operations
+references/*.md     15 files, loaded one at a time when a signal fires
+scripts/*.py        real tooling (env-overridable paths — portable as-is)
 ```
 
 **Watch the SKILL.md figure.** It was ~1.6k tokens at creation and is the one file loaded on
@@ -25,6 +25,7 @@ admin-bot XSS, where the exploit must fire in the lab's browser and exfiltrate t
 | `jsmine.py` | Bundle → routes (incl. query-string and `.concat()` forms), method map, router table, secrets, comments |
 | `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags |
 | `ssrfget.py` | Drives a stored-response SSRF as an arbitrary read: trigger, then fetch the artifact the app saved. `--sweep` finds internal services and probes admin paths on each |
+| `oob.py` | OOB collector + public tunnel in one command, for admin-bot labs — own the exfil channel instead of trusting the app's. Logs method/path/query/body/UA/`Origin`/`Referer`; answers every method with permissive CORS and a 1x1 GIF so `fetch`, `sendBeacon` and `<img>` all settle; matches flags through URL-encoding and base64 (incl. base64-wrapped JSON). cloudflared by default, `--tunnel ngrok\|none` |
 | `ctf-init.sh` | Parallel background recon: scaffolds the workspace, then headers / meta files / quick paths / feroxbuster / nuclei (htb only) at once. `CTF_ROOT` and `SECLISTS` override the Windows defaults |
 | `forgeflare/` | `forgeflare.py` (session that auto-re-clears a Forgeflare challenge, `solve_pow()`, WordPress helpers) and `ffproxy.py` (reverse proxy on 127.0.0.1:8899 that injects headers + clearance so unmodified third-party tools work) |
 | `flaghook.py` | `PostToolUse` hook — scans every Bash result for flag patterns, logs to `~/.claude/ctf-flags.log` |
@@ -37,6 +38,9 @@ python ~/.claude/skills/ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,
   | python ~/.claude/skills/ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths - --methods
 
 python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+
+# start this BEFORE the first payload on any admin-bot lab
+python ~/.claude/skills/ctf/scripts/oob.py --name <challenge>
 ```
 
 ## Consistency audit

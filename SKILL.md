@@ -27,10 +27,10 @@ names something specific (a CVE id, "wp2shell", a technique by name), search for
 that writeup *before* probing. Don't re-derive the mechanism from a PoC script and don't
 substitute a generic playbook. Details and the failure it's drawn from: `references/vault-index.md`.
 
-Two rules that repeatedly decide solves:
+Three rules that repeatedly decide solves:
 
-- **Use `curl -si` always.** Flags land in response *headers* (`X-Flag` on an otherwise-normal 403). Body-only checks make live endpoints look dead.
-- **Never trust status codes for discovery.** Labs jitter them. Discriminate on body size + content-type. If a fuzzer reports nothing, check that it isn't filtering jittered 2xx (`ffuf` needs `-mc all` plus a size filter).
+- **Use `curl -si` always.** Flags land in response *headers* (`X-Flag` on an otherwise-normal 403). Body-only checks make live endpoints look dead — and so does status-only reading: a 401/403 is never a reason to skip the headers (`references/cors.md`).
+- **Never trust status codes for discovery.** Labs jitter them. Discriminate on body size + content-type. If a fuzzer reports nothing, check that it isn't filtering jittered 2xx (`ffuf` needs `-mc all` plus a size filter). If it reports *everything*, the filter didn't apply — `ffuf -fs` takes comma-separated values, **not ranges**. Prefer a body regex: `-fr 'could not be found'`.
 
 ---
 
@@ -44,11 +44,19 @@ Two rules that repeatedly decide solves:
    BugForge re-provisions labs with a new flag and host but the same bug — a prior writeup is
    the method, free. One `find`, then move on → `references/vault-index.md`
 3. **Get an account** — login with given creds, else open registration → `references/auth-jwt.md`
-4. **Harvest JS** — bundle → routes, params, secrets, comments → `references/web-recon.md`
-5. **Probe every endpoint** — with auth *and* without auth, save every response to disk
-6. **Route to an exploit reference** — see the signal table below
-7. **Fuzz** — only after 5–6 are exhausted → `references/web-recon.md`
-8. **Loop gate** — status table, pick the strongest untested vector, keep going
+4. **Read the seeded corpus — first authenticated action, before any probing.** If the app stores
+   documents/files/notes/tickets, dump them all now, in the same parallel burst as steps 5–6;
+   labs plant the brief in one of them (Vaultly-010 named its own vulnerable endpoint there).
+   ```bash
+   for i in $(seq 1 40); do echo "== $i"; curl -s -b jar "$BASE/api/files/$i/preview" | head -c 400; done
+   ```
+   Read the status boundary too: the one id returning **403 to an account that owns everything
+   else** is the target object, free.
+5. **Harvest JS** — bundle → routes, params, secrets, comments → `references/web-recon.md`
+6. **Probe every endpoint** — with auth *and* without auth, save every response to disk
+7. **Route to an exploit reference** — see the signal table below
+8. **Fuzz** — only after 5–7 are exhausted → `references/web-recon.md`
+9. **Loop gate** — status table, pick the strongest untested vector, keep going
 
 Maintain `WORKLOG.md` in the challenge dir throughout: target, creds, `AUTH_HEADER`, endpoint list, **hypotheses killed** (with the evidence that killed them), live leads. This is what survives context compaction — write to it as you go, not at the end.
 
@@ -81,6 +89,7 @@ side) and burned half the solve, while the one URL-taking endpoint was the answe
 | Filename or path parameter; file upload accepting a filename | `references/traversal-upload.md` |
 | `/graphql` endpoint or introspection available | `references/graphql.md` |
 | "Admin reviews your submission" workflow; **any param taking a URL** — import/fetch/callback/webhook/avatar-from-URL | `references/xss-ssrf.md` |
+| `Access-Control-Allow-Origin` on any response; `Vary: Origin`; app documents a widget/embed/sandbox/connected-app story; a `403` route no role you hold can reach | `references/cors.md` |
 | Payload must **execute** in client JS (DOM/reflected XSS, flag in DOM/localStorage); browser URL-parsing quirk; want a clean-tier client on an anti-bot lab | `references/browser.md` |
 | Prices, quantities, vouchers, multi-step workflows, balances | `references/logic-race.md` |
 | Any JSON body endpoint (cheap, no prerequisites) | `references/json-type-confusion.md` |
@@ -112,6 +121,12 @@ re-run every interesting variant with everything else valid so each request reac
 deepest code path — and record oracle-run negatives in `WORKLOG.md` as untested, never as
 hypotheses killed.
 
+**A silent channel is an *unknown*, not a negative — and never worth more than 60s.** Waiting on
+something you don't control (a bot visit, a queued job, a callback), an empty channel conflates
+"never ran" with "wrong receiver." Own the receiver (`scripts/oob.py`), fire every transport at
+once with an `alive` beacon first, and change the channel rather than extending the wait →
+`references/xss-ssrf.md`.
+
 **The goal is the flag. Do not stop, do not ask for direction, do not summarise and wait** until the flag is in hand or every surface is marked exhausted.
 
 ---
@@ -137,6 +152,11 @@ python ~/.claude/skills/ctf/scripts/jsmine.py recon/ \
 # probes admin paths on each; or name paths directly
 python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
 python ~/.claude/skills/ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
+
+# OOB collector + public tunnel in one command. Run it (run_in_background) the moment a lab
+# mentions an admin/operator/reviewer opening your submission — BEFORE the first payload.
+python ~/.claude/skills/ctf/scripts/oob.py --name <challenge-name>   # prints OOB_URL=
+grep -a 'HIT\|FLAG' /c/Tools/CTF/<challenge-name>/oob.log
 ```
 
 `probe.py` verdicts: `not-a-route` (matches the calibrated fallback body, per method, or a framework 404), `auth-required`, and `NO-AUTH LEAK` / `NO-AUTH DATA` — the second pair is broken access control, found deliberately rather than by accident.
