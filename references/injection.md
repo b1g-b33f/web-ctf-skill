@@ -9,7 +9,31 @@ curl -si "<target>/api/search?q=1+OR+1=1--" $AUTH_HEADER
 curl -si "<target>/api/items/1'" $AUTH_HEADER
 ```
 
-DB error, changed row count, or changed length → sqlmap:
+DB error, changed row count, or changed length → **run `sqlquick.py` before sqlmap.** It's a
+low-volume fast-track for exactly this signal on a single GET parameter: baseline, then a quote,
+then boolean true/false pairs across a few closing forms (numeric, numeric+comment, quoted-string,
+parenthesized) — stopping at the first strong true/false differential instead of grinding through
+every form. A quote producing a DB error is *never* reported as SQLi on its own; only the boolean
+differential confirms it. Once confirmed it binary-searches the `ORDER BY` column boundary, verifies
+with a numbered `UNION SELECT`, and dumps SQLite tables whose name matches a priority keyword
+(`flag`, `secret`, `config`, `setting`, `user`, `admin`, `token`, `note`, `credential`, `account`)
+through that same UNION, stopping the moment a flag shows up:
+
+```bash
+python ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+# param is inferred when the URL has exactly one query param; otherwise pass --param
+python ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/items?id=1&sort=name" \
+  --param id --cookie "session=<value>"
+```
+
+It's rate-limit aware by default (0.55s between requests, two backoff retries on `429` at ~3s then
+~6s) and **aborts as inconclusive rather than reporting a negative** if throttling persists past
+that — a run that never got a clean answer is not evidence the parameter is safe. If it comes back
+inconclusive, slow down (`--delay`) and re-run before concluding anything, and don't let a 429-heavy
+sqlmap run stand as a negative either.
+
+If `sqlquick.py` misses or you need deeper technique coverage (blind time-based, second-order,
+stacked queries, DB fingerprinting), escalate to sqlmap:
 ```bash
 python /c/Tools/sqlmap/sqlmap.py -u "<target>/api/search?q=test" \
   --headers="Authorization: Bearer $TOKEN" --batch --level 2 --risk 2 --dbs \

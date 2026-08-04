@@ -42,7 +42,9 @@ Two rules that repeatedly decide solves:
 ## Order of operations
 
 1. **Source review** — if the challenge ships source (a download, a repo, `/c/Tools/Source Code/<name>/`), read it first; it replaces most guesswork → `references/source-review.md`
-2. **Launch recon in background** — never block on it → `references/web-recon.md`
+2. **Launch recon in background** — never block on it → `references/web-recon.md`. `ctf-init.sh`
+   mines JS and calibrates the SPA-fallback signature *before* backgrounding anything else, so
+   `recon/methods.txt` exists by step 3 — check it before hand-mining.
 2b. **Identity check** (skip if you keep no notes vault) — as soon as the app names itself (page
    `<title>`, header, slug), search vault *filenames* for its shortest distinctive **stem**
    (`*cafe*`, not `*cafeclub*` — spacing varies):
@@ -64,7 +66,8 @@ Two rules that repeatedly decide solves:
    ```
    Read the status boundary too: the one id returning **403 to an account that owns everything
    else** is the target object, free.
-5. **Harvest JS** — bundle → routes, params, secrets, comments → `references/web-recon.md`
+5. **Harvest JS again, authenticated** — apps sometimes bootstrap differently post-login; re-run
+   `jsharvest.py` with `$AUTH_HEADER` now → `references/web-recon.md`
 6. **Probe every endpoint** — with auth *and* without auth, save every response to disk
 7. **Route to an exploit reference** — see the signal table below
 8. **Fuzz** — only after 5–7 are exhausted → `references/web-recon.md`
@@ -133,6 +136,11 @@ re-run every interesting variant with everything else valid so each request reac
 deepest code path — and record oracle-run negatives in `WORKLOG.md` as untested, never as
 hypotheses killed.
 
+**Substantial `429` responses invalidate a scanner's negative conclusion, they don't confirm one.**
+"No injection found" under heavy throttling means the check never actually ran. `sqlquick.py`
+already self-aborts as inconclusive rather than reporting that as a negative — read sqlmap and
+every other scanner's output the same way before crossing a vector off.
+
 **A silent channel is an *unknown*, not a negative — and never worth more than 60s.** Waiting on
 something you don't control (a bot visit, a queued job, a callback), an empty channel conflates
 "never ran" with "wrong receiver." Own the receiver (`scripts/oob.py`), fire every transport at
@@ -155,6 +163,10 @@ python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <tar
 # mine a bundle: routes (incl. query strings + .concat), methods, router, secrets, comments
 python ~/.claude/skills/web-ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
 
+# ctf-init.sh already ran this pre-auth; re-run authenticated, apps sometimes
+# bootstrap different data post-login — writes recon/jsmine.txt + methods.txt
+python ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
+
 # probe every endpoint with auth AND without, auto-calibrating the not-found body
 # so status-code jitter can't hide real routes; scans headers + bodies for flags
 python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt
@@ -163,6 +175,9 @@ python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN
 python ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
   | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
   | python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths -
+
+# low-volume SQLi fast-track — run this BEFORE sqlmap → references/injection.md §C
+python ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
 
 # stored-response SSRF as an arbitrary read: --sweep finds internal services and
 # probes admin paths on each; or name paths directly
@@ -175,7 +190,13 @@ python ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge-name>   # print
 grep -a 'HIT\|FLAG' /c/Tools/CTF/<challenge-name>/oob.log
 ```
 
-`probe.py` verdicts: `not-a-route` (matches the calibrated fallback body, per method, or a framework 404), `auth-required`, and `NO-AUTH LEAK` / `NO-AUTH DATA` — the second pair is broken access control, found deliberately rather than by accident.
+`probe.py` verdicts: `not-a-route` (calibrated fallback body, per method, or a framework 404),
+`auth-required` (401/403, or identical denial with and without a token), `public-error` (identical
+non-fallback error on a status *other* than 401/403 — a real route, but not a leak), and
+`NO-AUTH LEAK` / `NO-AUTH DATA` — broken access control, found deliberately rather than by accident.
+
+`jwtquick.py` tags each candidate `rejected` (still denies — a reworded message is not progress),
+`POSSIBLE BYPASS` (the baseline denial is gone), or `FLAG` (unconditional success, any status).
 
 **Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
 

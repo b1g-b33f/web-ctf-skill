@@ -70,10 +70,19 @@ a fallback rather than a step-3 reflex.
 
 ### Reading the output
 
+Every candidate gets tagged, based on the response's status *and* body content — not length alone,
+and not a reworded error message:
+
+- `rejected` — still reaches a denial (401/403, or auth-denial language in the body). A changed
+  error message is still `rejected`, never treated as promising.
+- `POSSIBLE BYPASS` — the baseline denial is gone. Worth chasing immediately.
+- `FLAG` — a flag pattern anywhere in the body or a header, printed with the winning token. This is
+  unconditional success regardless of what the status code says.
+
 `jwtquick` prints a `forged:resign-only` candidate as a **control** — same claims, re-signed with
 the cracked secret. If that one also succeeds, the win came from re-signing (the server was
 rejecting your original token for an unrelated reason), not from privilege escalation. Expect it
-to stay at the baseline status.
+to stay `rejected` at the baseline status.
 
 ### Forging by hand
 

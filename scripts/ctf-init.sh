@@ -25,6 +25,7 @@ NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-'
 # Overridable so this works off the Windows layout without editing the script.
 CTF_ROOT="${CTF_ROOT:-/c/Tools/CTF}"
 SECLISTS="${SECLISTS:-/c/Tools/SecLists}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 WORKDIR="$CTF_ROOT/$NAME"
 RECON="$WORKDIR/recon"
@@ -68,54 +69,59 @@ cat > "$WORKDIR/notes.md" << EOF
 EOF
 
 echo "[*] Workspace scaffolded"
-echo "[*] Firing recon in parallel..."
 echo ""
 
-# ── Job 1: HTTP headers + root page ──────────────────────────────────────────
-(
-  echo "[job:headers] starting"
-  curl -sk -D "$RECON/headers.txt" "$TARGET/" -o "$RECON/root.html" \
+# ── Step 1: root page + JS harvest — sequential, blocking, fast ─────────────
+# Everything below this backgrounds. Doing this first means probe.py has a
+# METHOD -> PATH list to work from before feroxbuster/nuclei even finish.
+echo "[*] Fetching root page + harvesting client-side JS..."
+curl -sk -D "$RECON/headers.txt" "$TARGET/" -o "$RECON/root.html" \
+  --max-time 15 --connect-timeout 8
+# Also try HTTPS if HTTP connects but looks wrong
+if grep -q "400 Bad Request\|plain HTTP" "$RECON/root.html" 2>/dev/null; then
+  HTTPS_TARGET="${TARGET/http:/https:}"
+  curl -sk -D "$RECON/headers_https.txt" "$HTTPS_TARGET/" -o "$RECON/root_https.html" \
     --max-time 15 --connect-timeout 8
-  # Also try HTTPS if HTTP connects but looks wrong
-  if grep -q "400 Bad Request\|plain HTTP" "$RECON/root.html" 2>/dev/null; then
-    HTTPS_TARGET="${TARGET/http:/https:}"
-    curl -sk -D "$RECON/headers_https.txt" "$HTTPS_TARGET/" -o "$RECON/root_https.html" \
-      --max-time 15 --connect-timeout 8
-    echo "[job:headers] also tried HTTPS"
-  fi
-  echo "[job:headers] done"
-) &
-JOB_HEADERS=$!
+  echo "[*] also tried HTTPS"
+fi
+python "$SCRIPT_DIR/jsharvest.py" --base "$TARGET" --out "$RECON" --root "$RECON/root.html" \
+  > "$RECON/jsharvest.log" 2>&1
+echo "[*] JS harvest done — $(grep -c '^' "$RECON/methods.txt" 2>/dev/null || echo 0) METHOD -> PATH entries (recon/methods.txt, recon/jsmine.txt)"
+echo ""
 
-# ── Job 2: robots.txt, sitemap, common meta files ────────────────────────────
+echo "[*] Firing background recon in parallel..."
+echo ""
+
+# ── Job 1: meta files — SPA-fallback-aware ───────────────────────────────────
+# quickrecon.py calibrates the SPA/framework fallback signature from a
+# randomized nonexistent path first, so a lab whose unknown paths all answer
+# 200 with the same shell doesn't get reported as seven hits.
 (
   echo "[job:meta] starting"
-  for path in robots.txt sitemap.xml .well-known/security.txt crossdomain.xml \
-               humans.txt security.txt favicon.ico; do
-    code=$(curl -sk -o "$RECON/meta_$(echo $path | tr '/' '_')" \
-      -w "%{http_code}" --max-time 8 "$TARGET/$path")
-    [[ "$code" != "404" ]] && echo "$code $TARGET/$path" >> "$RECON/meta_hits.txt"
-  done
+  python "$SCRIPT_DIR/quickrecon.py" --base "$TARGET" --out "$RECON/meta_probe" \
+    --hitfile "$RECON/meta_hits.txt" --paths \
+    robots.txt sitemap.xml .well-known/security.txt crossdomain.xml \
+    humans.txt security.txt favicon.ico \
+    > "$RECON/meta_probe.log" 2>&1
   echo "[job:meta] done"
 ) &
 JOB_META=$!
 
-# ── Job 3: Common admin / API paths quick-check ──────────────────────────────
+# ── Job 2: admin / API quick paths — SPA-fallback-aware ──────────────────────
 (
   echo "[job:quickcheck] starting"
-  for path in admin api graphql api/graphql v1 v2 api/v1 api/v2 \
-               swagger swagger-ui swagger.json api-docs openapi.json \
-               console debug phpinfo.php .git/HEAD .env admin/login \
-               api/admin dashboard panel management; do
-    code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 8 "$TARGET/$path")
-    [[ "$code" != "404" && "$code" != "000" ]] && \
-      echo "$code $TARGET/$path" >> "$RECON/quickcheck_hits.txt"
-  done
+  python "$SCRIPT_DIR/quickrecon.py" --base "$TARGET" --out "$RECON/quickcheck_probe" \
+    --hitfile "$RECON/quickcheck_hits.txt" --paths \
+    admin api graphql api/graphql v1 v2 api/v1 api/v2 \
+    swagger swagger-ui swagger.json api-docs openapi.json \
+    console debug phpinfo.php .git/HEAD .env admin/login \
+    api/admin dashboard panel management \
+    > "$RECON/quickcheck_probe.log" 2>&1
   echo "[job:quickcheck] done"
 ) &
 JOB_QUICK=$!
 
-# ── Job 4: feroxbuster directory brute-force ─────────────────────────────────
+# ── Job 3: feroxbuster directory brute-force ─────────────────────────────────
 (
   echo "[job:ferox] starting"
   feroxbuster -u "$TARGET" \
@@ -126,7 +132,7 @@ JOB_QUICK=$!
 ) &
 JOB_FEROX=$!
 
-# ── Job 5: nuclei (skipped on bugforge) ─────────────────────────────────────────────────
+# ── Job 4: nuclei (skipped on bugforge) ─────────────────────────────────────────────────
 if [[ "$PLATFORM" != "bugforge" ]]; then
   (
     echo "[job:nuclei] starting"
@@ -142,11 +148,11 @@ else
 fi
 
 # ── Wait and report ──────────────────────────────────────────────────────────
-echo "[*] Jobs running: headers, meta, quickcheck, feroxbuster${JOB_NUCLEI:+, nuclei}"
+echo "[*] Jobs running: meta, quickcheck, feroxbuster${JOB_NUCLEI:+, nuclei}"
 echo "[*] Waiting for all jobs to finish..."
 echo ""
 
-wait $JOB_HEADERS $JOB_META $JOB_QUICK $JOB_FEROX ${JOB_NUCLEI:+$JOB_NUCLEI}
+wait $JOB_META $JOB_QUICK $JOB_FEROX ${JOB_NUCLEI:+$JOB_NUCLEI}
 
 echo ""
 echo "════════════════════════════════════════"
@@ -159,12 +165,16 @@ echo "── Headers ───────────────────�
 cat "$RECON/headers.txt" 2>/dev/null | grep -E "^(HTTP|Server|X-Powered|Set-Cookie|Content-Type|Location|X-)" | head -20
 
 echo ""
-echo "── Meta file hits ───────────────────────"
+echo "── JS harvest — METHOD -> PATH (recon/methods.txt) ─────"
+cat "$RECON/methods.txt" 2>/dev/null || echo "  none"
+
+echo ""
+echo "── Meta file hits — status size content-type URL (SPA fallback suppressed) ──"
 cat "$RECON/meta_hits.txt" 2>/dev/null || echo "  none"
 
 echo ""
-echo "── Quick path hits ──────────────────────"
-cat "$RECON/quickcheck_hits.txt" 2>/dev/null | sort -k1 -n || echo "  none"
+echo "── Quick path hits — status size content-type URL (SPA fallback suppressed) ──"
+cat "$RECON/quickcheck_hits.txt" 2>/dev/null || echo "  none"
 
 echo ""
 echo "── Feroxbuster (top 30) ─────────────────"
@@ -182,4 +192,4 @@ grep -rE 'HTB\{|bug\{|flag\{' "$RECON/" 2>/dev/null && echo "  FLAG FOUND ^^^" |
 
 echo ""
 echo "[*] All output saved to: $WORKDIR"
-echo "[*] Now run: /ctf $PLATFORM $TARGET $NAME"
+echo "[*] Now run: /web-ctf $PLATFORM $TARGET $NAME"

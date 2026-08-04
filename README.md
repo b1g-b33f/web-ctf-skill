@@ -24,7 +24,7 @@ different shape, not a superset of this one.
 ## How it is organised
 
 ```
-SKILL.md            ~3.3k tokens, always loaded: routing + order of operations
+SKILL.md            ~4.2k tokens, always loaded: routing + order of operations
 references/*.md     15 files, loaded one at a time when a signal fires
 scripts/*.py        real tooling (env-overridable paths — portable as-is)
 ```
@@ -51,12 +51,15 @@ browser and exfiltrate to a listener you control.
 
 | Script | Purpose |
 |---|---|
-| `jwtquick.py` | The whole cheap JWT surface in one ~1s foreground call: decode, dictionary-crack the HS256 secret (104k JWT-specific secrets, 0.8s worst case), mint `alg:none` ×4 plus privilege-escalated and id-swapped forgeries, fire them all at a route that refuses you, scan status/headers/body for a flag. Emits a re-sign-only control so a win is attributable to escalation rather than to re-signing |
+| `jwtquick.py` | The whole cheap JWT surface in one ~1s foreground call: decode, dictionary-crack the HS256 secret (104k JWT-specific secrets, 0.8s worst case), mint `alg:none` ×4 plus privilege-escalated and id-swapped forgeries, fire them all at a route that refuses you, scan status/headers/body for a flag. Emits a re-sign-only control so a win is attributable to escalation rather than to re-signing. Tags each candidate `rejected` / `POSSIBLE BYPASS` / `FLAG` off exact status+body, never off a reworded rejection message |
 | `jsmine.py` | Bundle → routes (incl. query-string and `.concat()` forms), method map, router table, secrets, comments |
-| `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags |
+| `jsharvest.py` | Fetches the root page, resolves and downloads every `<script src>` bundle (plus non-inline source maps), runs `jsmine.py` over the lot, and writes `recon/jsmine.txt` + a probe-ready `recon/methods.txt`. `ctf-init.sh` runs it once pre-auth; re-run it with `--token`/`--cookie` after login since some apps ship different bootstrap data once authenticated |
+| `quickrecon.py` | SPA-fallback-aware existence check: calibrates the not-found signature (size + content-type + body hash, status ignored) from one randomized nonexistent path, then checks a candidate list against it and against framework 404 bodies, saving every response and printing only real hits as `status size content-type URL` |
+| `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags. Verdicts: `not-a-route`, `auth-required`, `public-error` (same non-fallback error regardless of auth, on a status other than 401/403 — not a leak), `NO-AUTH LEAK`, `NO-AUTH DATA` |
+| `sqlquick.py` | Low-volume SQLi fast-track for one GET parameter, meant to run *before* sqlmap: seed → quote → boolean true/false across a few closing forms, stopping at the first strong differential; never claims SQLi from a quote error alone. Binary-searches the `ORDER BY` column boundary, verifies with a numbered `UNION SELECT`, then dumps priority-matching SQLite tables through it (stops at the first flag). Rate-limit aware — 0.55s default delay, two `429` backoff retries (~3s, ~6s), aborts as inconclusive rather than reporting a false negative if throttling persists |
 | `ssrfget.py` | Drives a stored-response SSRF as an arbitrary read: trigger, then fetch the artifact the app saved. `--sweep` finds internal services and probes admin paths on each |
 | `oob.py` | OOB collector + public tunnel in one command, for admin-bot labs — own the exfil channel instead of trusting the app's. Logs method/path/query/body/UA/`Origin`/`Referer`; answers every method with permissive CORS and a 1x1 GIF so `fetch`, `sendBeacon` and `<img>` all settle; matches flags through URL-encoding and base64 (incl. base64-wrapped JSON). cloudflared by default, `--tunnel ngrok\|none` |
-| `ctf-init.sh` | Parallel background recon: scaffolds the workspace, then headers / meta files / quick paths / feroxbuster / nuclei at once |
+| `ctf-init.sh` | Recon launcher: fetches the root page and runs `jsharvest.py` over it *first* (sequential, so `recon/methods.txt` exists before anything else finishes), then backgrounds `quickrecon.py` (meta files, admin/API quick paths), feroxbuster, and nuclei in parallel |
 | `forgeflare/` | `forgeflare.py` (session that auto-re-clears a Forgeflare-style anti-bot challenge, `solve_pow()`, WordPress helpers) and `ffproxy.py` (reverse proxy that injects headers + clearance so unmodified third-party tools work through it) |
 | `flaghook.py` | `PostToolUse` hook — scans every Bash result for flag patterns and logs hits |
 | `audit.py` | Repo consistency check, see below |
@@ -67,9 +70,15 @@ python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <tar
 
 python ~/.claude/skills/web-ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
 
+# re-harvest JS once authenticated — some apps bootstrap differently post-login
+python ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
+
 # pipe the METHOD -> PATH section so POST-only routes are probed as POST
 python ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
   | python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths - --methods
+
+# low-volume SQLi fast-track, before sqlmap
+python ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
 
 python ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
 

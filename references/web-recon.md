@@ -10,24 +10,48 @@ nohup bash ~/.claude/skills/web-ctf/scripts/ctf-init.sh <target> <challenge-name
   > /c/Tools/CTF/<challenge-name>/recon/_init.log 2>&1 &
 ```
 
-Produces in `recon/`: `headers.txt`, `root.html`, `meta_hits.txt`, `quickcheck_hits.txt`, `ferox.txt`, `nuclei.txt` (skipped on bugforge, whose labs are anti-bot instrumented).
+Before anything else backgrounds, `ctf-init.sh` fetches the root page and runs `jsharvest.py`
+against it — see §2. Produces in `recon/`:
+
+| File(s) | From | What it is |
+|---|---|---|
+| `headers.txt`, `root.html` | root fetch | the unauthenticated root page and its response headers |
+| `<bundle>.js`/`.mjs`, `<bundle>.map` | `jsharvest.py` | every downloaded script bundle and, where advertised, its source map |
+| `jsmine.txt` | `jsharvest.py` → `jsmine.py` | the full mined-routes report over everything downloaded |
+| `methods.txt` | `jsharvest.py` | just the `METHOD -> PATH` lines, ready to pipe into `probe.py` |
+| `fallback.headers`, `fallback.body` | `quickrecon.py` | the calibration response the meta/quickcheck jobs compared everything against |
+| `meta_hits.txt`, `quickcheck_hits.txt` | `quickrecon.py` | real hits only, as `status size content-type URL`, SPA fallback and framework-404s already suppressed |
+| `ferox.txt`, `nuclei.txt` | feroxbuster/nuclei | (nuclei skipped on bugforge, whose labs are anti-bot instrumented) |
 
 When you check back:
 - `Server` / `X-Powered-By` → framework. **Treat as untrusted** — some labs rotate it per response to poison fingerprinting.
 - `Set-Cookie` → cookie names, flags, session format
 - Ferox hits that look like API routes, admin panels, upload dirs
 
-**Build a running endpoint list** from `meta_hits.txt`, `quickcheck_hits.txt`, `ferox.txt` — every non-404 path is a candidate. Merge with JS findings. Do not let recon hits get dropped on the floor.
+**Build a running endpoint list** from `methods.txt`, `meta_hits.txt`, `quickcheck_hits.txt`, `ferox.txt` — every survivor is a candidate. Do not let recon hits get dropped on the floor.
 
 If the script reports a flag match already, record it and stop.
 
 ## 2. JS harvest
 
+`ctf-init.sh` already ran this once, pre-login, via `jsharvest.py`: it pulls every `<script src>`
+off the root page (resolving absolute, protocol-relative, root-relative and ordinary relative URLs
+the same way), downloads `.js`/`.mjs` bundles plus any non-inline `sourceMappingURL` they advertise,
+mines the lot, and writes `recon/jsmine.txt` + `recon/methods.txt`. Check those two files before
+hand-mining anything.
+
+**Re-run it authenticated.** Some apps ship different bootstrap data once you're logged in — that's
+the one thing the automatic pre-auth pass can't see:
+
 ```bash
-curl -sk <target>/ $AUTH_HEADER -o /c/Tools/CTF/<challenge-name>/recon/root_auth.html
+python ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
 ```
 
-Extract script srcs and download every bundle, then **use the script** — it already handles query-string routes, `.concat()` route building, minified axios aliases, and the router table:
+This re-mines the full accumulated bundle set (old assets plus any new ones) and overwrites
+`jsmine.txt`/`methods.txt` with the union — nothing from the first pass is lost.
+
+To mine a directory of bundles you already have on disk directly — it already handles
+query-string routes, `.concat()` route building, minified axios aliases, and the router table:
 
 ```bash
 python ~/.claude/skills/web-ctf/scripts/jsmine.py /c/Tools/CTF/<challenge-name>/recon/

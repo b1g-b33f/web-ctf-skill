@@ -206,7 +206,18 @@ def main():
             real.append(label)
         elif (not is_fallback(sn) and sa[0] != "ERR"
               and (rn.text or "") == (ra.text or "") and sn[1] > 0
-              and not looks_like_error(rn)):
+              and looks_like_error(rn)):
+            # same error, with and without a token. A real denial (401/403) is
+            # auth-required and expected; anything else means the error has
+            # nothing to do with auth — it's not a data leak, just a route that
+            # errors the same way for everyone
+            if sn[0] in (401, 403):
+                verdict = "auth-required"
+            else:
+                verdict = "public-error — same response without auth"
+            real.append(label)
+        elif (not is_fallback(sn) and sa[0] != "ERR"
+              and (rn.text or "") == (ra.text or "") and sn[1] > 0):
             # identical *content*, not merely identical length — two same-length
             # error bodies ("Admin access required" vs "Access token required")
             # are not a leak
