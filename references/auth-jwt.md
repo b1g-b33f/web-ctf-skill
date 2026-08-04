@@ -46,27 +46,32 @@ it and do not defer it — measured on this box:
 | `SecLists/Passwords/scraped-JWT-secrets.txt` | 104k | **0.8s** |
 | `rockyou.txt` | 14.3M | **38.7s** |
 
-0.8s is cheaper than one HTTP round-trip to the lab, so a background job here is pure overhead —
-the completion notification costs more attention than the job costs time. `scraped-JWT-secrets`
-is also the *better* list: weak JWT secrets are dev placeholders (`secret`, `your-256-bit-secret`,
-`changeme`), not human passwords. `secret` sits at line 40 of it and line 42 of rockyou.
+0.8s is cheaper than one HTTP round-trip to the lab, so a background job for the first stage
+alone would be pure overhead. `jwtquick.py` chains both lists by default: the 104k JWT-specific
+list first — dev placeholders (`secret`, `your-256-bit-secret`, `changeme`; `secret` sits at
+line 40 of it) — then rockyou automatically on a miss. **Don't assume a miss on the dev-placeholder
+list means the secret is exotic** — plain common words are still a common author choice, and
+that's exactly what the second stage is for, not an unlikely-to-pay-off escape hatch.
 
 ```bash
 python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" \
   --base <target> --test /api/admin/stats
 ```
 
-One call does: decode → dictionary-crack → mint `alg:none` × 4 → mint privilege-escalated and
-id-swapped forgeries → fire all of them at a route that currently refuses you → scan status,
-headers and body for a flag, and print the winning token. ~1s total.
+One call does: decode → dictionary-crack (chained, see above) → mint `alg:none` × 4 → mint
+privilege-escalated and id-swapped forgeries → fire all of them at a route that currently
+refuses you → scan status, headers and body for a flag, and print the winning token. ~1s
+typical (first-stage hit or immediate miss-through), ~40s worst case (both lists scanned dry) —
+still one blocking call either way, so it stays a foreground reflex rather than something worth
+a background job's context-switch overhead. `--wordlist <path>` pins a single list and skips
+the chain, for when you already know which one you want.
 
-Escalate to rockyou (**worth backgrounding at 39s**) only if the 104k list misses *and* JWT is
-still a live hypothesis. Its marginal yield is low: if 104k dev secrets miss, the secret is
-usually random.
-
-On Cheesy-007 the secret was the literal string `secret`. It cracked instantly — but only after
-~15 tool calls had gone into the app's commerce logic first, because the crack had been filed as
-a fallback rather than a step-3 reflex.
+On Cheesy-007 the secret was the literal string `secret` — caught by the first stage, instantly,
+but only after ~15 tool calls had gone into the app's commerce logic first, because the crack
+had been filed as a fallback rather than a step-3 reflex. On Necromancer the secret was
+`pumpkin` — not a dev placeholder, absent from the 104k list entirely, sitting at candidate 547
+of rockyou. Read literally, "if 104k dev secrets miss, the secret is usually random" would have
+stopped short of it; chaining to rockyou by default is what this lab argues for.
 
 ### Reading the output
 

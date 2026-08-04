@@ -50,6 +50,27 @@ python ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon
 This re-mines the full accumulated bundle set (old assets plus any new ones) and overwrites
 `jsmine.txt`/`methods.txt` with the union — nothing from the first pass is lost.
 
+**A component can "exist in the browser" and not exist on the server.** DevTools' Sources
+panel reconstructs a full original-file tree (`components/AdminPanel.js`, `Dashboard.js`, ...)
+purely client-side from a source map's `sources`/`sourcesContent` arrays — no per-file network
+request happens. Hitting that path directly with curl gets the SPA fallback, indistinguishable
+by status/size from a totally bogus URL; do not burn requests probing it as if it might be a
+real route. `jsharvest.py` now explodes every map's `sourcesContent` into `recon/src/<path>`
+automatically (vendor/`node_modules` excluded — typically 90%+ of a CRA/webpack map's `sources`
+list), reconstructing the same tree DevTools shows you. **Read `recon/src/` directly** — it's
+already the signal-only slice, worth checking before grepping the raw bundle at all.
+
+Necromancer: the flag-gate's JWT secret (`pumpkin`) was spelled out verbatim in
+`recon/src/components/AdminPanel.js` — a plain-English success-screen sentence ("The weak
+signing key \"pumpkin\" has revealed its true nature"), sitting in the *minified bundle itself*,
+no source map needed. It survived because minifiers don't touch string contents. It was missed
+on the first pass because it's prose: not a `//` comment, not a `key:"value()"` pair, doesn't
+start with a role keyword — every existing pattern assumes code shape. `jsmine.py`'s
+`HINT TEXT` section now catches this class directly: a real JS-string-literal match (escaped
+`\"`/`\'` treated as inside the string, not a terminator — a naive `[^"']*` class breaks on the
+first apostrophe, which prose is full of) filtered to sentence-length strings containing a
+vuln-narrative keyword (`weak `, `hardcod`, `backdoor`, `signing key`, `secret is`, ...).
+
 To mine a directory of bundles you already have on disk directly — it already handles
 query-string routes, `.concat()` route building, minified axios aliases, and the router table:
 

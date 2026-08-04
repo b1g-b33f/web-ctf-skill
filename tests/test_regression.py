@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """test_regression.py — SPA-aware recon regression test.
 
-Exercises quickrecon.py, jsharvest.py and probe.py together against fixture_app.py, a
-local HTTP server that serves:
+Two independent test cases:
+
+RegressionTest exercises quickrecon.py, jsharvest.py, jsmine.py and probe.py together
+against fixture_app.py, a local HTTP server that serves:
   - the same SPA shell, status 200, for every path it doesn't specifically implement
     (including a handful of admin/api quickcheck guesses)
   - one real JSON endpoint (/api/data) that always answers 401
   - a JS bundle (/app.js) with one GET route carrying a query string and one POST route
+  - a second bundle (/mapped.js) advertising a source map whose sourcesContent has one
+    node_modules (vendor) entry and one app entry containing a narrative hint sentence —
+    mirrors the Necromancer lab's AdminPanel.js finding
   - a public object endpoint (/api/objects/1) that always answers an identical JSON 404,
     with or without authentication
 
@@ -17,6 +22,15 @@ Asserts:
   - the JS-mined GET/POST routes land in recon/methods.txt
   - probe.py classifies /api/objects/1 as public-error (not a leak) and /api/data as
     auth-required
+  - jsharvest.py explodes the map's sourcesContent to src/, vendor excluded
+  - jsmine.py's HINT TEXT section surfaces the narrative sentence
+
+JwtquickWordlistChainTest exercises jwtquick.py's default two-stage crack (JWT-specific
+list, then auto-escalate to rockyou on a miss) against tiny temp-file stand-ins for both
+wordlists, swapped in via SECLISTS/ROCKYOU env overrides — no dependency on, or runtime
+anywhere near, the real 104k/14M-line lists. Asserts:
+  - a secret present only in the (fixture) rockyou list is still found by default
+  - --wordlist pins a single list and does not fall through to the other
 
 Run directly: python tests/test_regression.py
 """
@@ -33,10 +47,22 @@ import fixture_app
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
 
 
-def run(script, *args, timeout=60):
+def run(script, *args, timeout=60, env=None):
     cmd = [sys.executable, os.path.join(SCRIPTS, script)] + list(args)
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    run_env = {**os.environ, **env} if env else None
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=run_env)
     return p.stdout + p.stderr
+
+
+def make_jwt(payload, secret):
+    """Same signing scheme as jwtquick.py's own sign(), kept independent on purpose —
+    this is a black-box test and should not import the module it's exercising."""
+    import base64, hashlib, hmac, json as _json
+    b64e = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=")
+    h = b64e(_json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    p = b64e(_json.dumps(payload, separators=(",", ":")).encode())
+    s = b64e(hmac.new(secret.encode(), h + b"." + p, hashlib.sha256).digest())
+    return (h + b"." + p + b"." + s).decode()
 
 
 class RegressionTest(unittest.TestCase):
@@ -102,6 +128,68 @@ class RegressionTest(unittest.TestCase):
             self.assertIsNotNone(objects_line, "no output line for /api/objects/1:\n" + out)
             self.assertIn("public-error", objects_line)
             self.assertNotIn("NO-AUTH", objects_line, "public-error must not be counted as a leak")
+
+    def test_jsharvest_explodes_sourcemap_to_src_tree_vendor_excluded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = run("jsharvest.py", "--base", self.base_url, "--out", tmp)
+
+            admin_panel = os.path.join(tmp, "src", "components", "AdminPanel.js")
+            self.assertTrue(os.path.isfile(admin_panel),
+                             "sourcesContent was not exploded to src/:\n" + out)
+            with open(admin_panel, encoding="utf-8") as fh:
+                self.assertIn("correcthorse", fh.read())
+
+            vendor_dir = os.path.join(tmp, "src", "node_modules")
+            self.assertFalse(os.path.isdir(vendor_dir),
+                              "vendor/node_modules sources must be excluded from extraction")
+
+    def test_jsmine_surfaces_narrative_hint_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run("jsharvest.py", "--base", self.base_url, "--out", tmp)
+            out = run("jsmine.py", tmp)
+
+            self.assertIn("HINT TEXT", out)
+            self.assertIn("correcthorse", out,
+                          "a plain-English hint sentence (not code-shaped) should surface here:\n" + out)
+
+
+class JwtquickWordlistChainTest(unittest.TestCase):
+    """jwtquick.py's default crack is a two-stage chain: the JWT-specific list first,
+    then an automatic rockyou escalation only on a miss. Both lists are swapped for tiny
+    temp fixtures via SECLISTS/ROCKYOU env overrides so this doesn't depend on — or take
+    anywhere near as long as — the real 104k/14M-line lists."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        seclists = os.path.join(self.tmp.name, "seclists")
+        os.makedirs(os.path.join(seclists, "Passwords"))
+        with open(os.path.join(seclists, "Passwords", "scraped-JWT-secrets.txt"), "w") as fh:
+            fh.write("changeme\nsecret\nyour-256-bit-secret\n")  # deliberately missing our secret
+        rockyou = os.path.join(self.tmp.name, "rockyou.txt")
+        with open(rockyou, "w") as fh:
+            fh.write("123456\npassword\ncorrecthorse\nletmein\n")  # our secret IS in here
+        self.env = {"SECLISTS": seclists, "ROCKYOU": rockyou}
+
+    def test_default_chain_misses_jwt_list_then_finds_it_in_rockyou(self):
+        token = make_jwt({"id": 1, "role": "user"}, "correcthorse")
+        out = run("jwtquick.py", "--token", token, env=self.env)
+
+        self.assertIn("no hit", out, "expected the JWT-specific stage to miss first:\n" + out)
+        self.assertIn("escalating to rockyou", out, "chain did not auto-escalate:\n" + out)
+        self.assertIn("SECRET = 'correcthorse'", out, "rockyou stage did not find it:\n" + out)
+
+    def test_explicit_wordlist_skips_the_chain(self):
+        # secret is only in the (fixture) rockyou list; pinning --wordlist to the
+        # JWT-specific list only must NOT silently fall through to rockyou
+        token = make_jwt({"id": 1, "role": "user"}, "correcthorse")
+        jwt_list = os.path.join(self.tmp.name, "seclists", "Passwords", "scraped-JWT-secrets.txt")
+        out = run("jwtquick.py", "--token", token, "--wordlist", jwt_list, env=self.env)
+
+        self.assertIn("no hit", out)
+        self.assertNotIn("escalating to rockyou", out,
+                          "--wordlist must pin a single list, not chain:\n" + out)
+        self.assertNotIn("SECRET =", out)
 
 
 if __name__ == "__main__":

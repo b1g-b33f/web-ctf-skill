@@ -111,6 +111,29 @@ def main():
         r'["\']((?:admin|administrator|superuser|root|moderator|staff|owner|is_?admin|'
         r'role|internal|debug|flag)[^"\']{0,60})["\']', all_js, re.I))
 
+    # ---- narrative hint text -------------------------------------------------
+    # Prose the author wrote to explain the vuln post-exploitation (a success-screen
+    # sentence, an error message) slips past every pattern above: not a // comment,
+    # not a key:"value" pair, doesn't start with a role keyword. Minifiers don't
+    # touch string contents, so this catches it even with no source map at all.
+    #
+    # Must be a real JS-string-literal match (escaped \" / \' treated as *inside* the
+    # string, not a terminator) — a naive [^"']* class breaks on the first apostrophe,
+    # which is fatal since prose is full of them ("Council's chamber...").
+    str_lit = re.findall(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'', all_js)
+    HINT_KW = ("weak ", "hardcod", "backdoor", "insecure", "vulnerable", "bypass",
+               "default password", "default credential", "for demo", "do not use in prod",
+               "secret is", "secret was", "signing key", "private key", "master key",
+               "should never", "for testing only", "not secure")
+    hints = []
+    for raw in str_lit:
+        inner = raw[1:-1]
+        if not (40 <= len(inner) <= 300) or len(inner.split()) < 5:
+            continue
+        if any(k in inner.lower() for k in HINT_KW):
+            hints.append(inner)
+    section("HINT TEXT (narrative strings, not code)", hints, limit=60)
+
     # ---- flags already present ---------------------------------------------
     hits = re.findall(r'(?:HTB|bug|flag|CTF|THM|picoCTF)\{[^}]{4,80}\}', all_js, re.I)
     if hits:

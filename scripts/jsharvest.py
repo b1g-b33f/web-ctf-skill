@@ -7,6 +7,15 @@ urljoin), downloads the .js/.mjs bundles plus their source maps (skipped when th
 sourceMappingURL is an inline data: URI), then runs jsmine.py over everything that
 landed on disk and writes recon/jsmine.txt + a probe-ready recon/methods.txt.
 
+Every downloaded map also gets exploded: sourcesContent (the original, unminified
+per-file source webpack/CRA embeds) is written out to recon/src/<original/path>.js,
+vendor (node_modules) and webpack-runtime entries excluded. This is the same virtual
+tree Chrome/Firefox DevTools' Sources panel reconstructs from the map client-side —
+a component that looks like a real file in the browser (e.g. components/AdminPanel.js)
+but 404s/SPA-falls-back over a direct HTTP request is exactly this: present in
+sourcesContent, never actually served on disk. Read recon/src/ directly; it's the
+signal-only slice of what's normally 90%+ node_modules noise in the raw .map text.
+
 Usage:
   python jsharvest.py --base https://target --out recon/
   python jsharvest.py --base https://target --out recon/ --root recon/root.html   # reuse
@@ -18,6 +27,7 @@ data once authenticated, and re-running re-mines the full accumulated bundle set
 """
 import argparse
 import glob
+import json
 import os
 import re
 import subprocess
@@ -44,6 +54,54 @@ def fetch(sess, url, headers, timeout=20):
     except Exception as e:
         print("[!] GET %s failed: %s" % (url, e))
         return None
+
+
+def extract_sourcemap(map_path, out_dir):
+    """Explode a source map's embedded sourcesContent into real files under out_dir/src/.
+
+    DevTools reconstructs this same tree client-side purely from data already in the
+    .map file — no extra network requests happen per source. A component like
+    AdminPanel.js that 'exists in the browser' (Sources panel) but 404s/SPA-falls-back
+    over HTTP is exactly this: it's in sourcesContent, not on the filesystem being served.
+    Regex-mining the raw .map text finds it too, in principle, but drowned under
+    node_modules noise (typically 90%+ of a CRA/webpack bundle's sources) and past
+    jsmine's pattern shapes (comment syntax, key:"value") if the hint is plain prose.
+    Exploding to real files gets a clean, greppable, human-readable app-only tree instead.
+
+    Returns the list of extracted (non-vendor) relative paths.
+    """
+    try:
+        with open(map_path, encoding="utf-8", errors="replace") as fh:
+            m = json.load(fh)
+    except (OSError, json.JSONDecodeError) as e:
+        print("      [!] could not parse source map: %s" % e)
+        return []
+
+    sources = m.get("sources") or []
+    contents = m.get("sourcesContent") or []
+    if not sources or not contents or len(sources) != len(contents):
+        return []
+
+    NOISE = ("node_modules/", "webpack/bootstrap", "webpack/runtime")
+    src_root = os.path.join(out_dir, "src")
+    extracted = []
+    for src, content in zip(sources, contents):
+        if content is None:
+            continue
+        norm = src.replace("\\", "/").lstrip("./")
+        while norm.startswith("../"):
+            norm = norm[3:]
+        if not norm or any(n in norm for n in NOISE):
+            continue
+        dest = os.path.join(src_root, *norm.split("/"))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        try:
+            with open(dest, "w", encoding="utf-8", errors="replace") as fh:
+                fh.write(content)
+            extracted.append(norm)
+        except OSError as e:
+            print("      [!] could not write %s: %s" % (norm, e))
+    return extracted
 
 
 def safe_filename(url, used):
@@ -125,10 +183,18 @@ def main():
                 mr = fetch(sess, map_url, headers)
                 if mr is not None:
                     map_fn = safe_filename(map_url, used_names)
-                    with open(os.path.join(a.out, map_fn), "w", encoding="utf-8", errors="replace") as fh:
+                    map_path = os.path.join(a.out, map_fn)
+                    with open(map_path, "w", encoding="utf-8", errors="replace") as fh:
                         fh.write(mr.text)
                     maps += 1
                     print("      sourceMappingURL -> %s (%d bytes)" % (map_fn, len(mr.text)))
+
+                    extracted = extract_sourcemap(map_path, a.out)
+                    if extracted:
+                        print("      [+] exploded sourcesContent -> %s/src/ (%d app file(s), "
+                              "vendor/node_modules excluded):" % (a.out.rstrip("/"), len(extracted)))
+                        for p in sorted(extracted):
+                            print("          " + p)
 
     print("[*] downloaded %d bundle(s), %d source map(s)" % (downloaded, maps))
 

@@ -156,15 +156,22 @@ once with an `alive` beacon first, and change the channel rather than extending 
 Use these instead of retyping one-liners — they encode fixes for mistakes that have cost real time.
 
 ```bash
-# the whole cheap JWT surface in ~1s, FOREGROUND: crack + alg:none + forge + fire at a
+# the whole cheap JWT surface, FOREGROUND: crack (JWT-specific list, then auto-escalates
+# to rockyou on a miss — ~1s typical, ~40s worst case) + alg:none + forge + fire at a
 # refusing route + scan headers/body for the flag. Run it the moment you hold a token.
 python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
-# mine a bundle: routes (incl. query strings + .concat), methods, router, secrets, comments
+# mine a bundle: routes (incl. query strings + .concat), methods, router, secrets,
+# comments, and narrative hint text (flavor-text sentences revealing the bug, e.g. a
+# success-screen message that spells out a weak secret in plain English)
 python ~/.claude/skills/web-ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
 
 # ctf-init.sh already ran this pre-auth; re-run authenticated, apps sometimes
-# bootstrap different data post-login — writes recon/jsmine.txt + methods.txt
+# bootstrap different data post-login — writes recon/jsmine.txt + methods.txt, and
+# explodes every source map's sourcesContent into recon/src/<path> (vendor excluded) —
+# the same file tree DevTools' Sources panel shows you, reconstructed to disk. A file
+# that "exists in the browser" but 404s/SPA-falls-back over direct HTTP is exactly this:
+# embedded in the map, never actually served — check recon/src/ before probing it as a URL.
 python ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
 
 # probe every endpoint with auth AND without, auto-calibrating the not-found body

