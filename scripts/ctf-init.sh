@@ -128,7 +128,7 @@ JOB_QUICK=$!
     -w "$SECLISTS/Discovery/Web-Content/raft-medium-directories.txt" \
     --depth 2 -t 20 --timeout 8 -q \
     -o "$RECON/ferox.txt" 2>/dev/null
-  echo "[job:ferox] done — $(wc -l < "$RECON/ferox.txt" 2>/dev/null || echo 0) hits"
+  echo "[job:ferox] done — $(grep -cE '^[0-9]{3} ' "$RECON/ferox.txt" 2>/dev/null || echo 0) hits"
 ) &
 JOB_FEROX=$!
 
@@ -178,7 +178,7 @@ cat "$RECON/quickcheck_hits.txt" 2>/dev/null || echo "  none"
 
 echo ""
 echo "── Feroxbuster (top 30) ─────────────────"
-cat "$RECON/ferox.txt" 2>/dev/null | head -30 || echo "  none"
+grep -E '^[0-9]{3} ' "$RECON/ferox.txt" 2>/dev/null | head -30 || echo "  none"
 
 if [[ -n "$JOB_NUCLEI" ]]; then
   echo ""
