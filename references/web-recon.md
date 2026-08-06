@@ -5,9 +5,9 @@
 Feroxbuster and nuclei take 1–5 minutes. **Do not block.** Launch and go straight to auth — login/register endpoints are known guesses, not something recon must discover first.
 
 ```bash
-mkdir -p /c/Tools/CTF/<challenge-name>/{recon,exploits,loot}
+mkdir -p ~/Tools/CTF/<challenge-name>/{recon,exploits,loot}
 nohup bash ~/.claude/skills/web-ctf/scripts/ctf-init.sh <target> <challenge-name> <platform> \
-  > /c/Tools/CTF/<challenge-name>/recon/_init.log 2>&1 &
+  > ~/Tools/CTF/<challenge-name>/recon/_init.log 2>&1 &
 ```
 
 Before anything else backgrounds, `ctf-init.sh` fetches the root page and runs `jsharvest.py`
@@ -44,7 +44,7 @@ hand-mining anything.
 the one thing the automatic pre-auth pass can't see:
 
 ```bash
-python ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
+python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
 ```
 
 This re-mines the full accumulated bundle set (old assets plus any new ones) and overwrites
@@ -75,7 +75,7 @@ To mine a directory of bundles you already have on disk directly — it already 
 query-string routes, `.concat()` route building, minified axios aliases, and the router table:
 
 ```bash
-python ~/.claude/skills/web-ctf/scripts/jsmine.py /c/Tools/CTF/<challenge-name>/recon/
+python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Tools/CTF/<challenge-name>/recon/
 ```
 
 The inline version below is the fallback if the script is unavailable:
@@ -84,7 +84,7 @@ The inline version below is the fallback if the script is unavailable:
 python3 -c "
 import re, glob
 all_content = ''
-for f in glob.glob('C:/Tools/CTF/<challenge-name>/recon/*.js'):
+for f in glob.glob('~/Tools/CTF/<challenge-name>/recon/*.js'):
     with open(f, encoding='utf-8', errors='replace') as fh: all_content += fh.read() + '\n'
 
 # API endpoints — note the trailing char class INCLUDES ? so query-string routes aren't missed
@@ -136,9 +136,9 @@ Hit everything found, **with `$AUTH_HEADER` and again without it.** Use the scri
 # feed it jsmine's METHOD -> PATH section, not just the path list: probing a
 # POST-only route with GET returns the SPA index, which matches the 404
 # calibration exactly and reports not-a-route
-python ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
+python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
   | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
-  | python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" \
+  | python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" \
       --paths - --methods --out recon/probe
 ```
 
@@ -156,7 +156,7 @@ Record per response: status, content-type, **all** body fields (especially ones 
 
 Then:
 ```bash
-grep -rE 'HTB\{|bug\{|flag\{' /c/Tools/CTF/<challenge-name>/recon/ 2>/dev/null
+grep -rE 'HTB\{|bug\{|flag\{' ~/Tools/CTF/<challenge-name>/recon/ 2>/dev/null
 ```
 
 ## 4. Fuzzing (only after exploitation is exhausted)
@@ -164,11 +164,11 @@ grep -rE 'HTB\{|bug\{|flag\{' /c/Tools/CTF/<challenge-name>/recon/ 2>/dev/null
 `ctf-init.sh` already ran ferox/nuclei — check `recon/ferox.txt` and `recon/nuclei.txt` for unexplored hits before re-scanning.
 
 ```bash
-feroxbuster -u <target>/<subpath> -w /c/Tools/SecLists/Discovery/Web-Content/raft-large-directories.txt \
+feroxbuster -u <target>/<subpath> -w ~/Tools/SecLists/Discovery/Web-Content/raft-large-directories.txt \
   --depth 2 -t 20 --timeout 5 -q 2>&1 | head -100
 
-python -m arjun -u <target>/api/<endpoint> -m GET -q 2>&1 | head -40
-python -m arjun -u <target>/api/<endpoint> -m POST -q 2>&1 | head -40
+python3 -m arjun -u <target>/api/<endpoint> -m GET -q 2>&1 | head -40
+python3 -m arjun -u <target>/api/<endpoint> -m POST -q 2>&1 | head -40
 ```
 
 **ffuf against a jittering target:** default matchers drop non-standard 2xx, so a lab that rewrites every status to 200/201/202 makes ffuf report *zero hits* while everything looks alive. Always:

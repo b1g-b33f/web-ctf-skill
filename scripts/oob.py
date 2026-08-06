@@ -6,7 +6,7 @@ and two long blind polls on it (3 min + 5 min) were spent before an external col
 was built. Building the collector takes ~40s. On any admin-bot lab, do it BEFORE the
 first payload, not after the in-app channel disappoints.
 
-    python ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>
+    python3 ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>
 
 Prints `OOB_URL=<https://...>` on stdout as soon as the tunnel is up, then serves
 forever. Run it with run_in_background:true and grep the log:
@@ -26,9 +26,9 @@ failure mode, so prefer it and keep `--tunnel ngrok` as the fallback.
 import argparse, base64, os, re, subprocess, sys, threading, datetime, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-CTF_ROOT = os.environ.get("CTF_ROOT", r"C:\Tools\CTF")
-CF = os.environ.get("CLOUDFLARED", r"C:\Tools\cloudflared.exe")
-NGROK = os.environ.get("NGROK", r"C:\Tools\Ngrok\ngrok.exe")
+CTF_ROOT = os.environ.get("CTF_ROOT", os.path.expanduser("~/Tools/CTF"))
+CF = os.environ.get("CLOUDFLARED", "cloudflared")
+NGROK = os.environ.get("NGROK", "ngrok")
 FLAG = re.compile(r"(?:HTB|bug|flag|CTF)\{[^}]{4,120}\}", re.I)
 GIF = (b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
        b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;")

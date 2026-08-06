@@ -11,11 +11,11 @@ checks each candidate against it and against common framework 404 bodies
 still saved to disk for review.
 
 Usage:
-  python quickrecon.py --base https://target --paths robots.txt sitemap.xml admin api \
+  python3 quickrecon.py --base https://target --paths robots.txt sitemap.xml admin api \
       --out recon --hitfile meta_hits.txt
 
   # or feed candidates on stdin, one per line
-  printf 'admin\\napi\\ngraphql\\n' | python quickrecon.py --base https://target --paths - --out recon
+  printf 'admin\\napi\\ngraphql\\n' | python3 quickrecon.py --base https://target --paths - --out recon
 
 Writes recon/fallback.headers + recon/fallback.body (the calibration response) and one
 saved response per candidate under --out. Real hits are written to --hitfile (default:

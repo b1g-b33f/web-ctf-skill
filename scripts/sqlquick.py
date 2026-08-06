@@ -8,8 +8,8 @@ boolean true/false pairs (stopping at the first strong differential instead of t
 every closing form), a binary-searched ORDER BY boundary, a numbered UNION SELECT to
 verify it, then a bounded, priority-ordered SQLite dump through that UNION.
 
-    python sqlquick.py --url "https://target/api/search?q=widget" --token "$TOKEN"
-    python sqlquick.py --url "https://target/api/items?id=1&sort=name" --param id
+    python3 sqlquick.py --url "https://target/api/search?q=widget" --token "$TOKEN"
+    python3 sqlquick.py --url "https://target/api/items?id=1&sort=name" --param id
 
 A quote producing a DB error is never reported as SQLi on its own — only a true/false
 behavioural differential confirms it. Every request is rate-limited (0.55s default

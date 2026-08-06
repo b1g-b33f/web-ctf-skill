@@ -43,7 +43,7 @@ response.
 
 ```bash
 curl -s "<target>/api/ai-log?format=json" -o ailog.json
-python -c "
+python3 -c "
 import json,collections
 d=json.load(open('ailog.json'))
 print(collections.Counter(x['event'] for x in d))
@@ -70,7 +70,7 @@ already exists — do not rebuild it:**
 # scripts/forgeflare/  (lab-agnostic; target from $FORGEFLARE_TARGET or argv)
 #   forgeflare.py  -- FF() session that auto-re-clears; solve_pow(); wp_login()/wp_nonce()
 #   ffproxy.py     -- reverse proxy on 127.0.0.1:8899 injecting headers + clearance
-python ~/.claude/skills/web-ctf/scripts/forgeflare/ffproxy.py <target> &
+python3 ~/.claude/skills/web-ctf/scripts/forgeflare/ffproxy.py <target> &
 ```
 
 Point third-party tools (a public PoC, sqlmap, ffuf, curl) **at the proxy** — not via

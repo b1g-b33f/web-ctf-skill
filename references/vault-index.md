@@ -115,7 +115,7 @@ is observation-driven, not recall-driven. Run it as soon as you know what the ap
 
 ```bash
 # filenames only, whole AppSec tree, one pass. Use the shortest distinctive STEM.
-find "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}" -iname "*cafe*.md"
+find "${NOTES_VAULT:-$HOME/Obsidian/Pentesting notes/02-AppSec}" -iname "*cafe*.md"
 ```
 
 **Search the stem, not the full name.** Note filenames are inconsistently spaced: `*cafeclub*`
@@ -138,13 +138,13 @@ between provisionings.
 Search **filenames only**, scoped to one folder, and open at most two hits:
 
 ```bash
-find "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}/<folder>" -iname "*<keyword>*.md"
+find "${NOTES_VAULT:-$HOME/Obsidian/Pentesting notes/02-AppSec}/<folder>" -iname "*<keyword>*.md"
 ```
 
 Only if that fails, content-search a single folder — never `02-AppSec/` as a whole:
 
 ```bash
-grep -rli "<keyword>" "${NOTES_VAULT:-/c/Obsidian notes/Pentesting notes/02-AppSec}/<folder>/"
+grep -rli "<keyword>" "${NOTES_VAULT:-$HOME/Obsidian/Pentesting notes/02-AppSec}/<folder>/"
 ```
 
 Adapt every payload to the target's actual framework and language. A cheat sheet is a starting point, not a verdict.

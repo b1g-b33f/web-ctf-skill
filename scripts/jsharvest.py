@@ -17,8 +17,8 @@ sourcesContent, never actually served on disk. Read recon/src/ directly; it's th
 signal-only slice of what's normally 90%+ node_modules noise in the raw .map text.
 
 Usage:
-  python jsharvest.py --base https://target --out recon/
-  python jsharvest.py --base https://target --out recon/ --root recon/root.html   # reuse
+  python3 jsharvest.py --base https://target --out recon/
+  python3 jsharvest.py --base https://target --out recon/ --root recon/root.html   # reuse
                                                                                    # an already-fetched page instead of fetching a second time
 
 Run it again after login with --token/--cookie: some apps ship different bootstrap

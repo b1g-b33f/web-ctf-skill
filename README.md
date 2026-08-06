@@ -66,64 +66,76 @@ browser and exfiltrate to a listener you control.
 
 ```bash
 # run this the moment you hold a token — foreground, ~1s, not a background job
-python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
+python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
-python ~/.claude/skills/web-ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
+python3 ~/.claude/skills/web-ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
 
 # re-harvest JS once authenticated — some apps bootstrap differently post-login
-python ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
+python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
 
 # pipe the METHOD -> PATH section so POST-only routes are probed as POST
-python ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
-  | python ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths - --methods
+python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
+  | python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths - --methods
 
 # low-volume SQLi fast-track, before sqlmap
-python ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
 
-python ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+python3 ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
 
 # start this BEFORE the first payload on any admin-bot lab
-python ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>
+python3 ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>
 ```
 
 ## Install
 
-1. Copy this directory to `~/.claude/skills/web-ctf/`.
-2. Set `CTF_ROOT` to where you want challenge workspaces (defaults to a Windows path, see below).
+1. Symlink this directory to `~/.claude/skills/web-ctf/` (don't copy — keep the git clone the
+   single source of truth so edits and `gh`-based maintenance stay in one place):
+   ```bash
+   ln -s ~/Tools/web-ctf-skill ~/.claude/skills/web-ctf
+   ```
+2. Set `CTF_ROOT` to where you want challenge workspaces (defaults to `~/Tools/CTF`, see below).
 3. Optionally wire the flag hook (next section).
 
 Scripts need no edits — they take paths as arguments and read `CTF_ROOT`, `SECLISTS`,
 `CLOUDFLARED`, `NGROK` and `NOTES_VAULT` from the environment.
 
-| Variable | Purpose |
-|---|---|
-| `CTF_ROOT` | where challenge workspaces are created |
-| `SECLISTS` | SecLists tree used by the fuzzing steps |
-| `CLOUDFLARED` / `NGROK` | tunnel binaries for `oob.py` |
-| `NOTES_VAULT` | optional personal writeup vault, see below |
+| Variable | Purpose | macOS default |
+|---|---|---|
+| `CTF_ROOT` | where challenge workspaces are created | `~/Tools/CTF` |
+| `SECLISTS` | SecLists tree used by the fuzzing steps | `~/Tools/SecLists` |
+| `ROCKYOU` | wordlist `jwtquick.py` escalates to on a miss | `$SECLISTS/Passwords/Leaked-Databases/rockyou.txt` |
+| `CLOUDFLARED` / `NGROK` | tunnel binaries for `oob.py` | `cloudflared` / `ngrok` (on `PATH` via brew) |
+| `NOTES_VAULT` | optional personal writeup vault, see below | `~/Obsidian/Pentesting notes/02-AppSec` |
 
-### On Windows, run it from Git Bash
+### macOS setup
 
-The Python tooling is cross-platform and runs from any shell, but the shell snippets throughout
-`SKILL.md` and the references are POSIX — `${VAR:-default}` fallbacks, `seq`, `sed -n`, `grep -a`,
-pipelines into python — and `ctf-init.sh` is a bash script. Several default paths also use the
-MSYS `/c/...` form, which only resolves under Git Bash. Install
-[Git for Windows](https://gitforwindows.org/) and point the agent's shell at it.
+The Python tooling and the POSIX shell snippets throughout `SKILL.md` and the references run
+natively — Terminal.app opens a login shell, `ctf-init.sh` is a plain bash script, no path
+mangling to work around. One real gotcha:
 
-Two Windows-specific gotchas worth knowing up front:
+- **macOS ships no bare `python` command, only `python3`.** Every invocation in this skill uses
+  `python3` for that reason — translate any `python ...` one-liner pasted in from an external
+  writeup before running it.
 
-- **Windows PowerShell 5.1 aliases `curl` to `Invoke-WebRequest`**, which takes different flags
-  and different quoting. Every recon snippet here is `curl -si`, so in PowerShell they fail or
-  behave differently rather than erroring cleanly. (PowerShell 7+ dropped the alias.)
-- **Git Bash rewrites URL-looking arguments**: `/admin/config` becomes
-  `C:/Program Files/Git/admin/config`. Prefix `MSYS_NO_PATHCONV=1` for those calls — see the
-  Environment section of `SKILL.md`.
+External dependencies, installed via Homebrew where a formula exists:
 
-**External dependencies.** A fresh clone does not carry these, and the sections naming them are
-dead ends without them: a [SecLists](https://github.com/danielmiessler/SecLists) tree
-(`SECLISTS`), `cloudflared` or `ngrok` for OOB callbacks, and the CLI tools the references invoke
-(`jwt_tool`, `sqlmap`, `ffuf`, `feroxbuster`, `nuclei`). The skill degrades gracefully — each sits
-behind a specific signal.
+```bash
+brew install feroxbuster nuclei sqlmap ffuf cloudflared pipx
+```
+
+`jwt_tool` and `SecLists` have no brew package — they're tracked as plain git clones instead:
+
+```bash
+git clone https://github.com/ticarpi/jwt_tool.git ~/Tools/jwt_tool
+python3 -m pip install --user -r ~/Tools/jwt_tool/requirements.txt
+
+git clone --depth 1 https://github.com/danielmiessler/SecLists.git ~/Tools/SecLists
+tar -xzf ~/Tools/SecLists/Passwords/Leaked-Databases/rockyou.txt.tar.gz \
+  -C ~/Tools/SecLists/Passwords/Leaked-Databases/
+```
+
+The skill degrades gracefully if any of these are missing — each sits behind a specific signal,
+named in `SKILL.md`'s routing table.
 
 **The notes vault is optional.** `references/vault-index.md` describes looking up your own prior
 writeups when you have a *named* hypothesis — on re-provisioned labs a past writeup is often the
@@ -139,7 +151,7 @@ in **project** settings rather than user settings, so it only runs in your CTF w
 ```json
 { "hooks": { "PostToolUse": [ { "matcher": "Bash", "hooks": [
   { "type": "command",
-    "command": "python \"<path-to>/.claude/skills/web-ctf/scripts/flaghook.py\"",
+    "command": "python3 \"<path-to>/.claude/skills/web-ctf/scripts/flaghook.py\"",
     "timeout": 15 } ] } ] } }
 ```
 
@@ -157,33 +169,39 @@ compiling. Each check exists because that exact drift happened at least once.
 **Git hooks aren't versioned — install it per clone:**
 
 ```bash
-printf '#!/bin/sh\nexec python "$(git rev-parse --show-toplevel)/scripts/audit.py"\n' \
+printf '#!/bin/sh\nexec python3 "$(git rev-parse --show-toplevel)/scripts/audit.py"\n' \
   > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 ```
 
-Run it directly any time with `python scripts/audit.py`. It blocks the commit on failure;
+Run it directly any time with `python3 scripts/audit.py`. It blocks the commit on failure;
 `git commit --no-verify` overrides when a change is deliberate.
 
 ## Porting to another platform
 
-The scripts are portable as-is, and the shell snippets assume a POSIX shell — which on Linux and
-macOS is the default, and on Windows means Git Bash (see above). These docs contain host paths
-from the environment they were written in, and need repointing if you don't share that layout:
+The scripts are portable as-is, and the shell snippets assume a POSIX shell — the default on
+Linux and macOS (this repo's current baseline), and available on Windows via Git Bash. These
+docs contain host paths from the environment they were written in (currently `~/Tools/...` on
+macOS), and need repointing if you don't share that layout:
 
 | File | What needs repointing |
 |---|---|
-| `SKILL.md` | workspace and source-code roots; the Git-Bash argv-mangling note is Windows-only and can be dropped |
-| `references/auth-jwt.md` | `jwt_tool.py`, SecLists password lists |
-| `references/injection.md` | `sqlmap.py` |
+| `SKILL.md` | workspace and source-code roots |
+| `references/auth-jwt.md` | `jwt_tool.py` clone location, SecLists password lists |
+| `references/injection.md` | sqlmap output/exploits directory (the `sqlmap` binary itself is on `PATH`) |
 | `references/source-review.md` | local source-code root |
 | `references/traversal-upload.md` | workspace root |
 | `references/vault-index.md` | notes-vault root (**and the vault itself must be present**) |
 | `references/web-recon.md` | SecLists wordlists (or set `SECLISTS`) |
-| `references/xss-ssrf.md` | `cloudflared` binary |
+
+**Porting to Kali or another Linux box:** the scripts and POSIX shell snippets need no changes —
+only the literal `~/Tools/...` example paths above, if your layout differs, and `python3` should
+already be present. **Porting back to Windows:** see this repo's git history prior to the macOS
+port for the Git Bash-specific notes (MSYS path mangling, the PowerShell `curl` alias) that were
+dropped from the current docs since they no longer apply to the primary platform.
 
 ## Contributing
 
 The references are deliberately written as *decision rules with the evidence behind them*, not as
 payload dumps — each one exists because a specific failure cost real time. If you add a lesson,
 put it in the reference its signal routes to, keep `SKILL.md` unchanged unless the lesson changes
-*which* reference you open, and make sure `python scripts/audit.py` passes.
+*which* reference you open, and make sure `python3 scripts/audit.py` passes.

@@ -9,9 +9,9 @@ This lets UNMODIFIED third-party tooling run against a Forgeflare-protected lab
 the PoW themselves:
 
     export FORGEFLARE_TARGET=https://lab-xxxx.labs-app.bugforge.io
-    python ffproxy.py
+    python3 ffproxy.py
     curl -s http://127.0.0.1:8899/wp-json
-    python /c/Tools/sqlmap/sqlmap.py -u 'http://127.0.0.1:8899/x?id=1' --batch
+    sqlmap -u 'http://127.0.0.1:8899/x?id=1' --batch
     ffuf -u http://127.0.0.1:8899/FUZZ -w wordlist.txt
 
 Point tools at the proxy directly (NOT via curl -x); it is a reverse proxy, so

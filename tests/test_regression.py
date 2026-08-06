@@ -32,7 +32,7 @@ anywhere near, the real 104k/14M-line lists. Asserts:
   - a secret present only in the (fixture) rockyou list is still found by default
   - --wordlist pins a single list and does not fall through to the other
 
-Run directly: python tests/test_regression.py
+Run directly: python3 tests/test_regression.py
 """
 import os
 import re

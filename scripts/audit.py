@@ -11,11 +11,11 @@ Every problem this checks for was found by hand at least once:
   * a real flag pasted into a doc as an example
 
 Usage:
-  python scripts/audit.py            # check, exit 1 on failure
-  python scripts/audit.py --quiet    # only print failures
+  python3 scripts/audit.py            # check, exit 1 on failure
+  python3 scripts/audit.py --quiet    # only print failures
 
 Install as a hook (not versioned by git, so do this per clone):
-  printf '#!/bin/sh\\nexec python "$(git rev-parse --show-toplevel)/scripts/audit.py"\\n' \\
+  printf '#!/bin/sh\\nexec python3 "$(git rev-parse --show-toplevel)/scripts/audit.py"\\n' \\
     > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 """
 import glob
@@ -85,9 +85,12 @@ else:
              "the addition into a reference" % (claimed, actual))
 
 # 6. porting table vs files that actually carry host paths ---------------------
-# Git-Bash roots are excluded: they appear as argv-demangling examples, not as
-# tool paths that need repointing on another machine.
-HOSTPATH = re.compile(r'(?:C:\\|C:/|/c/)(?!Program Files/Git)[A-Za-z0-9_]')
+# Windows roots kept for regression safety even though the current baseline is
+# macOS; ~/Tools and ~/Obsidian (or $HOME-spelled) are this baseline's equivalent
+# of a hardcoded host path and need repointing on a machine with a different layout.
+HOSTPATH = re.compile(
+    r'(?:C:\\|C:/|/c/)(?!Program Files/Git)[A-Za-z0-9_]'
+    r'|(?:~|\$HOME)/(?:Tools|Obsidian)/[A-Za-z]')
 have_paths = {d for d in docs if d != "README.md" and HOSTPATH.search(read(d))}
 
 porting = readme.split("## Porting")[-1] if "## Porting" in readme else ""
@@ -134,7 +137,9 @@ for p in paths:
 # 9. bundled scripts must not hardcode host paths (they ship with the repo) -----
 for p in paths:
     body = read(p)
-    for m in set(re.findall(r'(?<![:${])(?:/c/Tools|C:/Tools|C:\\Tools)/[A-Za-z]\S*', body)):
+    for m in set(re.findall(
+            r'(?<![:${])(?:/c/Tools|C:/Tools|C:\\Tools|/Users/[^/\s]+/Tools|/home/[^/\s]+/Tools)/[A-Za-z]\S*',
+            body)):
         if ":-" in body[max(0, body.find(m) - 30):body.find(m)]:
             continue                    # ${VAR:-/c/Tools/...} default, fine
         warn("%s hardcodes %s - prefer an env override with that as the default" % (p, m))

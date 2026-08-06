@@ -2,8 +2,8 @@
 """jsmine.py — mine JS bundles for routes, params, secrets, comments, config.
 
 Usage:
-  python jsmine.py <dir-or-file> [more...]
-  python jsmine.py /c/Tools/CTF/<name>/recon/
+  python3 jsmine.py <dir-or-file> [more...]
+  python3 jsmine.py ~/Tools/CTF/<name>/recon/
 
 Catches the things hand-rolled regexes miss: query-string routes, template-literal
 and .concat() route building, and the client router table.

@@ -22,9 +22,9 @@ fi
 # Sanitize name
 NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
 
-# Overridable so this works off the Windows layout without editing the script.
-CTF_ROOT="${CTF_ROOT:-/c/Tools/CTF}"
-SECLISTS="${SECLISTS:-/c/Tools/SecLists}"
+# Overridable so this works off any machine's layout without editing the script.
+CTF_ROOT="${CTF_ROOT:-$HOME/Tools/CTF}"
+SECLISTS="${SECLISTS:-$HOME/Tools/SecLists}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 WORKDIR="$CTF_ROOT/$NAME"
@@ -84,7 +84,7 @@ if grep -q "400 Bad Request\|plain HTTP" "$RECON/root.html" 2>/dev/null; then
     --max-time 15 --connect-timeout 8
   echo "[*] also tried HTTPS"
 fi
-python "$SCRIPT_DIR/jsharvest.py" --base "$TARGET" --out "$RECON" --root "$RECON/root.html" \
+python3 "$SCRIPT_DIR/jsharvest.py" --base "$TARGET" --out "$RECON" --root "$RECON/root.html" \
   > "$RECON/jsharvest.log" 2>&1
 echo "[*] JS harvest done — $(grep -c '^' "$RECON/methods.txt" 2>/dev/null || echo 0) METHOD -> PATH entries (recon/methods.txt, recon/jsmine.txt)"
 echo ""
@@ -98,7 +98,7 @@ echo ""
 # 200 with the same shell doesn't get reported as seven hits.
 (
   echo "[job:meta] starting"
-  python "$SCRIPT_DIR/quickrecon.py" --base "$TARGET" --out "$RECON/meta_probe" \
+  python3 "$SCRIPT_DIR/quickrecon.py" --base "$TARGET" --out "$RECON/meta_probe" \
     --hitfile "$RECON/meta_hits.txt" --paths \
     robots.txt sitemap.xml .well-known/security.txt crossdomain.xml \
     humans.txt security.txt favicon.ico \
@@ -110,7 +110,7 @@ JOB_META=$!
 # ── Job 2: admin / API quick paths — SPA-fallback-aware ──────────────────────
 (
   echo "[job:quickcheck] starting"
-  python "$SCRIPT_DIR/quickrecon.py" --base "$TARGET" --out "$RECON/quickcheck_probe" \
+  python3 "$SCRIPT_DIR/quickrecon.py" --base "$TARGET" --out "$RECON/quickcheck_probe" \
     --hitfile "$RECON/quickcheck_hits.txt" --paths \
     admin api graphql api/graphql v1 v2 api/v1 api/v2 \
     swagger swagger-ui swagger.json api-docs openapi.json \

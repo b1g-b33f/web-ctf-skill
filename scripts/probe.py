@@ -6,11 +6,11 @@ jitter by calibrating the app's not-found body, and scans headers as well as bod
 for flags (flags hide in X-Flag on otherwise-normal 403s).
 
 Usage:
-  python probe.py --base https://target [--token TOK | --cookie 'k=v'] --paths paths.txt
-  python jsmine.py recon/ | grep '^  /api' | python probe.py --base https://target --token TOK --paths -
+  python3 probe.py --base https://target [--token TOK | --cookie 'k=v'] --paths paths.txt
+  python3 jsmine.py recon/ | grep '^  /api' | python3 probe.py --base https://target --token TOK --paths -
 
   # feed it jsmine's METHOD -> PATH section so POST routes get probed as POST:
-  python jsmine.py recon/ | python probe.py --base https://target --token TOK --paths -
+  python3 jsmine.py recon/ | python3 probe.py --base https://target --token TOK --paths -
 
 Input lines may be either "/api/thing" (probed as GET) or "POST /api/thing".
 GET-only probing silently mislabels write-only endpoints as not-a-route: an SPA

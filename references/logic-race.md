@@ -41,6 +41,6 @@ This is the most reliable way to enumerate an account's email when the app hides
 Share tokens, invite codes, order ids, reset tokens: grab one legitimately and check whether it's sequential, a hex/base36 timestamp, or a short hash of something knowable. Decode before assuming randomness:
 
 ```bash
-python -c "print(int('<token>',16))"        # timestamp?
-python -c "print(int('<token>',36))"
+python3 -c "print(int('<token>',16))"        # timestamp?
+python3 -c "print(int('<token>',36))"
 ```
