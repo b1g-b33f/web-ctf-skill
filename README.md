@@ -146,7 +146,19 @@ own index, kept as a worked example of how to organise one.
 ## Flag hook
 
 `flaghook.py` scans Bash output for flag patterns so a flag can't scroll past unnoticed. Wire it
-in **project** settings rather than user settings, so it only runs in your CTF workspace:
+in **project** settings rather than user settings, so it's scoped to CTF work rather than every
+session everywhere.
+
+**Placement matters and is easy to get wrong.** Claude Code resolves project settings by walking
+*up* from the session's actual working directory — never down into subdirectories. Put
+`.claude/settings.json` at (or above) wherever your `/web-ctf` sessions actually start, **not**
+inside `$CTF_ROOT` or a per-challenge folder underneath it. A copy nested one level too deep sits
+there validly formed and silently never loads — this shipped once, ran an entire live session
+with the hook dark, and was only caught because the flag happened to also print to stdout
+directly. If sessions start from `~/Tools`, the file belongs at `~/Tools/.claude/settings.json`.
+**Verify it, don't assume it:** after wiring it, run a Bash command that echoes a fake flag
+pattern (`echo 'bug{TEST}'`) and confirm a line actually lands in `~/.claude/ctf-flags.log`
+before trusting it in a real run.
 
 ```json
 { "hooks": { "PostToolUse": [ { "matcher": "Bash", "hooks": [

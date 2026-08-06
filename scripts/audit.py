@@ -134,7 +134,19 @@ for p in paths:
         if r.returncode:
             fail("%s has a syntax error: %s" % (p, r.stderr.strip().splitlines()[0]))
 
-# 9. bundled scripts must not hardcode host paths (they ship with the repo) -----
+# 9. shell scripts invoked as direct executables must carry the exec bit -------
+# Only .sh files are checked: every .py script here is invoked as `python3 script.py`,
+# so its own exec bit is irrelevant. A .sh script that loses 100755 (Edit/sed don't
+# reliably preserve file mode) fails with a bare permission-denied on a fresh clone,
+# even though the documented `bash script.sh ...` invocation still works fine -
+# this exact drift shipped once and broke every /web-ctf run until a live test caught it.
+for p in [p for p in paths if p.endswith(".sh")]:
+    r = subprocess.run(["git", "ls-files", "-s", p], capture_output=True, text=True)
+    mode = r.stdout.split()[0] if r.stdout.strip() else None
+    if mode and mode != "100755":
+        fail("%s is tracked as mode %s, not 100755 - lost its executable bit" % (p, mode))
+
+# 10. bundled scripts must not hardcode host paths (they ship with the repo) ----
 for p in paths:
     body = read(p)
     for m in set(re.findall(

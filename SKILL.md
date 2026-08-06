@@ -207,7 +207,7 @@ non-fallback error on a status *other* than 401/403 — a real route, but not a 
 
 **Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
 
-A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/CTF/.claude/settings.json`) scans every Bash result for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
+A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/.claude/settings.json` — project settings resolve by walking *up* from cwd, so it must live at or above wherever the session actually started, never inside `$CTF_ROOT`) scans every Bash result for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses — verify it fired (check the log) rather than assume it did.
 
 ## Environment
 
