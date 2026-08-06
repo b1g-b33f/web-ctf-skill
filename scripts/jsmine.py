@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""jsmine.py — mine JS bundles for routes, params, secrets, comments, config.
+"""jsmine.py — mine JS bundles and rendered HTML for routes and methods.
 
 Usage:
   python3 jsmine.py <dir-or-file> [more...]
@@ -21,7 +21,7 @@ def load(args):
     for a in args:
         files = []
         if os.path.isdir(a):
-            for ext in ("*.js", "*.mjs", "*.map", "*.ts"):
+            for ext in ("*.js", "*.mjs", "*.map", "*.ts", "*.html", "*.htm"):
                 files += glob.glob(os.path.join(a, "**", ext), recursive=True)
         else:
             files = [a]
@@ -80,9 +80,21 @@ def main():
                        r'(/[^"\']+)["\']', all_js)
     concat_calls = re.findall(r'[\w$]{1,4}\.(get|post|put|delete|patch)\s*\(\s*["\']'
                               r'(/[^"\']+)["\']\s*\.concat', all_js)
+    # Server-rendered apps often expose their complete route map as ordinary
+    # HTML forms even when every linked JS asset is unavailable. Attribute order
+    # is deliberately irrelevant here; method defaults to GET per HTML.
+    forms = []
+    for tag in re.findall(r'<form\b[^>]*>', all_js, re.I):
+        attrs = dict((k.lower(), v) for k, _, v in re.findall(
+            r'([:\w-]+)\s*=\s*(["\'])(.*?)\2', tag, re.I | re.S))
+        action = attrs.get("action", "")
+        if action.startswith("/"):
+            forms.append("%-6s %s" % (attrs.get("method", "GET").upper(), action))
+
     section("METHOD -> PATH",
             ["%-6s %s" % (m.upper(), p) for m, p in calls]
-            + ["%-6s %s{...}" % (m.upper(), p) for m, p in concat_calls])
+            + ["%-6s %s{...}" % (m.upper(), p) for m, p in concat_calls]
+            + forms)
 
     # ---- client router (reveals pages, hence features) ----------------------
     section("ROUTER PATHS", re.findall(r'path:\s*["\']([^"\']+)["\']', all_js))

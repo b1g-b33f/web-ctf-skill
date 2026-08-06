@@ -47,8 +47,9 @@ case "$PLATFORM" in
   *) FLAG_FMT="HTB{}" ;;
 esac
 
-# Write notes.md
-cat > "$WORKDIR/notes.md" << EOF
+# Initialize the durable worklog once. Rerunning recon must never erase live leads.
+if [[ ! -f "$WORKDIR/WORKLOG.md" ]]; then
+cat > "$WORKDIR/WORKLOG.md" << EOF
 # $NAME
 
 **Platform:** $PLATFORM
@@ -67,6 +68,9 @@ cat > "$WORKDIR/notes.md" << EOF
 ## Flag
 
 EOF
+else
+  echo "[*] Preserving existing $WORKDIR/WORKLOG.md"
+fi
 
 echo "[*] Workspace scaffolded"
 echo ""
@@ -84,8 +88,11 @@ if grep -q "400 Bad Request\|plain HTTP" "$RECON/root.html" 2>/dev/null; then
     --max-time 15 --connect-timeout 8
   echo "[*] also tried HTTPS"
 fi
-python3 "$SCRIPT_DIR/jsharvest.py" --base "$TARGET" --out "$RECON" --root "$RECON/root.html" \
-  > "$RECON/jsharvest.log" 2>&1
+if ! python3 "$SCRIPT_DIR/jsharvest.py" --base "$TARGET" --out "$RECON" \
+  --root "$RECON/root.html" --crawl-pages > "$RECON/jsharvest.log" 2>&1; then
+  echo "[!] JS/HTML harvest failed; see recon/jsharvest.log"
+  tail -5 "$RECON/jsharvest.log" 2>/dev/null
+fi
 echo "[*] JS harvest done — $(grep -c '^' "$RECON/methods.txt" 2>/dev/null || echo 0) METHOD -> PATH entries (recon/methods.txt, recon/jsmine.txt)"
 echo ""
 

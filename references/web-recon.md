@@ -6,9 +6,12 @@ Feroxbuster and nuclei take 1–5 minutes. **Do not block.** Launch and go strai
 
 ```bash
 mkdir -p ~/Tools/CTF/<challenge-name>/{recon,exploits,loot}
-nohup bash ~/.claude/skills/web-ctf/scripts/ctf-init.sh <target> <challenge-name> <platform> \
-  > ~/Tools/CTF/<challenge-name>/recon/_init.log 2>&1 &
+bash ~/.claude/skills/web-ctf/scripts/ctf-init.sh <target> <challenge-name> <platform>
 ```
+
+Run that command in a retained execution session and let the tool yield a session id while
+you continue with auth. Do not add `nohup` or shell `&`: command runners may terminate detached
+children when the parent call returns. `ctf-init.sh` already parallelizes its slow jobs internally.
 
 Before anything else backgrounds, `ctf-init.sh` fetches the root page and runs `jsharvest.py`
 against it — see §2. Produces in `recon/`:
@@ -44,10 +47,12 @@ hand-mining anything.
 the one thing the automatic pre-auth pass can't see:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
+python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ \
+  --cookie-file <curl-cookie-jar> --page /dashboard --crawl-pages
 ```
 
-This re-mines the full accumulated bundle set (old assets plus any new ones) and overwrites
+This safely GET-crawls same-origin HTML pages from the dashboard, mines rendered form actions
+as well as bundles, rejects non-2xx/error-page assets, and re-mines the full accumulated set. It overwrites
 `jsmine.txt`/`methods.txt` with the union — nothing from the first pass is lost.
 
 **A component can "exist in the browser" and not exist on the server.** DevTools' Sources

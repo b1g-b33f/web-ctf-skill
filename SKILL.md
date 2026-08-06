@@ -42,7 +42,8 @@ Two rules that repeatedly decide solves:
 ## Order of operations
 
 1. **Source review** — if the challenge ships source (a download, a repo, `~/Tools/Source Code/<name>/`), read it first; it replaces most guesswork → `references/source-review.md`
-2. **Launch recon in background** — never block on it → `references/web-recon.md`. `ctf-init.sh`
+2. **Launch recon in a retained execution session** — let the tool yield while it runs; do not
+   detach it with `nohup ... &` → `references/web-recon.md`. `ctf-init.sh`
    mines JS and calibrates the SPA-fallback signature *before* backgrounding anything else, so
    `recon/methods.txt` exists by step 3 — check it before hand-mining.
 2b. **Identity check** (skip if you keep no notes vault) — as soon as the app names itself (page
@@ -161,7 +162,7 @@ Use these instead of retyping one-liners — they encode fixes for mistakes that
 # refusing route + scan headers/body for the flag. Run it the moment you hold a token.
 python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
-# mine a bundle: routes (incl. query strings + .concat), methods, router, secrets,
+# mine bundles and rendered HTML: routes (incl. query strings + .concat), form methods,
 # comments, and narrative hint text (flavor-text sentences revealing the bug, e.g. a
 # success-screen message that spells out a weak secret in plain English)
 python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Tools/CTF/<name>/recon/
@@ -172,7 +173,8 @@ python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Tools/CTF/<name>/recon/
 # the same file tree DevTools' Sources panel shows you, reconstructed to disk. A file
 # that "exists in the browser" but 404s/SPA-falls-back over direct HTTP is exactly this:
 # embedded in the map, never actually served — check recon/src/ before probing it as a URL.
-python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ --token "$TOKEN"
+python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ \
+  --cookie-file <curl-cookie-jar> --page /dashboard --crawl-pages
 
 # probe every endpoint with auth AND without, auto-calibrating the not-found body
 # so status-code jitter can't hide real routes; scans headers + bodies for flags
@@ -207,7 +209,7 @@ non-fallback error on a status *other* than 401/403 — a real route, but not a 
 
 **Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
 
-A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/.claude/settings.json` — project settings resolve by walking *up* from cwd, so it must live at or above wherever the session actually started, never inside `$CTF_ROOT`) scans every Bash result for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses — verify it fired (check the log) rather than assume it did.
+A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/.claude/settings.json` — project settings resolve by walking *up* from cwd, so it must live at or above wherever the session actually started, never inside `$CTF_ROOT`) scans command results for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses. Verify it with a fake flag after changing tool surfaces or restarting the app; a stale matcher fails silently.
 
 ## Environment
 

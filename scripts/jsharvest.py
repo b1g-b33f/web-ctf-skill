@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """jsharvest.py — automatically harvest client-side JS at recon init.
 
-Fetches the root page, pulls every <script src=...> off it, resolves each one
+Fetches the root and optional same-origin pages, mines rendered HTML forms, and
+pulls every <script src=...> off them. It resolves each one
 (absolute, protocol-relative, root-relative, and ordinary relative all handled by
-urljoin), downloads the .js/.mjs bundles plus their source maps (skipped when the
+urljoin), downloads only successful non-HTML bundles plus their source maps (skipped when the
 sourceMappingURL is an inline data: URI), then runs jsmine.py over everything that
 landed on disk and writes recon/jsmine.txt + a probe-ready recon/methods.txt.
 
@@ -24,9 +25,12 @@ Usage:
 Run it again after login with --token/--cookie: some apps ship different bootstrap
 data once authenticated, and re-running re-mines the full accumulated bundle set
 (old assets + any new ones), overwriting jsmine.txt/methods.txt with the union.
+For cookie-authenticated server-rendered apps, pass --cookie-file <curl-jar>,
+--page /dashboard, and --crawl-pages so form actions are harvested even if JS assets 404.
 """
 import argparse
 import glob
+import http.cookiejar
 import json
 import os
 import re
@@ -42,6 +46,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 
 SCRIPT_SRC = re.compile(r'<script\b[^>]*\bsrc\s*=\s*["\']([^"\']+)["\']', re.I)
+PAGE_HREF = re.compile(r'<a\b[^>]*\bhref\s*=\s*["\']([^"\']+)["\']', re.I)
 SOURCEMAP = re.compile(r'//[#@]\s*sourceMappingURL=(\S+)|/\*[#@]\s*sourceMappingURL=(\S+?)\s*\*/', re.I)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -54,6 +59,47 @@ def fetch(sess, url, headers, timeout=20):
     except Exception as e:
         print("[!] GET %s failed: %s" % (url, e))
         return None
+
+
+def usable_asset(response, url, kind="javascript"):
+    """Reject error pages before they are saved and mined as successful assets."""
+    if response is None:
+        return False
+    ctype = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+    if not 200 <= response.status_code < 300:
+        print("  [!] skipping %s: HTTP %d (%s)" % (url, response.status_code,
+                                                     ctype or "unknown content-type"))
+        return False
+    if kind == "javascript":
+        allowed = (not ctype or "javascript" in ctype or "ecmascript" in ctype
+                   or ctype in ("text/plain", "application/octet-stream"))
+        if not allowed or response.text.lstrip().startswith(("<!DOCTYPE", "<html")):
+            print("  [!] skipping %s: expected JavaScript, got %s" %
+                  (url, ctype or "an HTML body"))
+            return False
+    elif "html" in ctype or response.text.lstrip().startswith(("<!DOCTYPE", "<html")):
+        print("  [!] skipping %s: expected source map, got %s" %
+              (url, ctype or "an HTML body"))
+        return False
+    return True
+
+
+def page_links(html, current_url, base):
+    """Return safe same-origin GET pages; API/download/static URLs are not crawled."""
+    origin = urlsplit(base)
+    out = []
+    for href in PAGE_HREF.findall(html):
+        url = urljoin(current_url, href).split("#", 1)[0]
+        parsed = urlsplit(url)
+        if (parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc):
+            continue
+        path = parsed.path or "/"
+        if path.startswith(("/api/", "/_next/")) or path in ("/api", "/logout"):
+            continue
+        if re.search(r'\.(?:js|mjs|css|map|png|jpe?g|gif|svg|ico|pdf|zip)$', path, re.I):
+            continue
+        out.append(url)
+    return out
 
 
 def extract_sourcemap(map_path, out_dir):
@@ -123,6 +169,13 @@ def main():
     ap.add_argument("--root", help="reuse an already-fetched copy of the root page instead of fetching it again")
     ap.add_argument("--token")
     ap.add_argument("--cookie")
+    ap.add_argument("--cookie-file", help="Netscape-format cookie jar, such as curl -c output")
+    ap.add_argument("--page", action="append", default=[],
+                    help="additional same-origin page to fetch and mine; repeatable")
+    ap.add_argument("--crawl-pages", action="store_true",
+                    help="crawl same-origin HTML links with safe GET requests")
+    ap.add_argument("--max-pages", type=int, default=30,
+                    help="maximum additional pages fetched by --crawl-pages (default: 30)")
     ap.add_argument("--header", action="append", default=[], help="extra header 'Key: Value', repeatable")
     a = ap.parse_args()
 
@@ -140,6 +193,14 @@ def main():
             headers[k.strip()] = v.strip()
 
     sess = requests.Session()
+    if a.cookie_file:
+        jar = http.cookiejar.MozillaCookieJar(a.cookie_file)
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+            sess.cookies.update(jar)
+        except (OSError, http.cookiejar.LoadError) as e:
+            print("[!] could not load cookie jar %s: %s" % (a.cookie_file, e))
+            return 2
 
     root_url = base + "/"
     if a.root and os.path.isfile(a.root):
@@ -153,7 +214,44 @@ def main():
             fh.write(root_html)
         print("[*] fetched root page: %s (%d bytes)" % (root_url, len(root_html)))
 
-    srcs = SCRIPT_SRC.findall(root_html)
+    page_blobs = [(root_url, root_html)]
+    queue = [urljoin(root_url, p) for p in a.page]
+    if a.crawl_pages:
+        queue.extend(page_links(root_html, root_url, base))
+    seen_pages = {root_url}
+    pages_dir = os.path.join(a.out, "pages")
+    fetched_pages = 0
+    while queue and fetched_pages < max(0, a.max_pages):
+        page_url = queue.pop(0)
+        if page_url in seen_pages:
+            continue
+        seen_pages.add(page_url)
+        parsed = urlsplit(page_url)
+        origin = urlsplit(base)
+        if (parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc):
+            print("[!] refusing cross-origin page: %s" % page_url)
+            continue
+        r = fetch(sess, page_url, headers)
+        if r is None or not 200 <= r.status_code < 300:
+            code = r.status_code if r is not None else "request failed"
+            print("  [!] page %s -> %s, skipping" % (page_url, code))
+            continue
+        ctype = r.headers.get("Content-Type", "").lower()
+        if "html" not in ctype and not r.text.lstrip().startswith(("<!DOCTYPE", "<html")):
+            print("  [!] page %s is not HTML (%s), skipping" % (page_url, ctype or "unknown"))
+            continue
+        fetched_pages += 1
+        os.makedirs(pages_dir, exist_ok=True)
+        page_path = os.path.join(pages_dir, "page-%03d.html" % fetched_pages)
+        with open(page_path, "w", encoding="utf-8", errors="replace") as fh:
+            fh.write(r.text)
+        page_blobs.append((page_url, r.text))
+        print("  [+] page %s -> %s (%d bytes)" % (page_url, page_path, len(r.text)))
+        if a.crawl_pages:
+            queue.extend(page_links(r.text, page_url, base))
+
+    combined_html = "\n".join(body for _, body in page_blobs)
+    srcs = SCRIPT_SRC.findall(combined_html)
     resolved = sorted({urljoin(root_url, s) for s in srcs})
     print("[*] found %d <script src> tag(s), %d unique URL(s)" % (len(srcs), len(resolved)))
 
@@ -161,10 +259,11 @@ def main():
     print("[*] %d .js/.mjs bundle(s) to download" % len(js_urls))
 
     used_names = set(os.path.basename(p) for p in glob.glob(os.path.join(a.out, "*")))
-    downloaded, maps = 0, 0
+    downloaded, maps, skipped = 0, 0, 0
     for url in js_urls:
         r = fetch(sess, url, headers)
-        if r is None:
+        if not usable_asset(r, url):
+            skipped += 1
             continue
         fn = safe_filename(url, used_names)
         path = os.path.join(a.out, fn)
@@ -181,7 +280,7 @@ def main():
             elif map_ref:
                 map_url = urljoin(url, map_ref)
                 mr = fetch(sess, map_url, headers)
-                if mr is not None:
+                if usable_asset(mr, map_url, kind="source map"):
                     map_fn = safe_filename(map_url, used_names)
                     map_path = os.path.join(a.out, map_fn)
                     with open(map_path, "w", encoding="utf-8", errors="replace") as fh:
@@ -196,7 +295,8 @@ def main():
                         for p in sorted(extracted):
                             print("          " + p)
 
-    print("[*] downloaded %d bundle(s), %d source map(s)" % (downloaded, maps))
+    print("[*] downloaded %d bundle(s), skipped %d invalid bundle(s), %d source map(s)" %
+          (downloaded, skipped, maps))
 
     proc = subprocess.run([sys.executable, JSMINE, a.out], capture_output=True, text=True)
     jsmine_out = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")

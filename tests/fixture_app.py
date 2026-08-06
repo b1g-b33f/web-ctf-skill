@@ -4,7 +4,8 @@
 Not part of the CTF harness itself; used only by tests/test_regression.py.
 
 Routes:
-  GET  /                -> SPA shell HTML with <script src> tags for /app.js and /mapped.js
+  GET  /                -> SPA shell HTML with valid bundles, one missing bundle, and /login link
+  GET  /login           -> rendered form exposing POST /api/auth/login
   GET  /app.js           -> bundle: one GET route with a query string, one POST route
   GET  /mapped.js         -> bundle advertising a sourceMappingURL, no routes of its own
   GET  /mapped.js.map     -> source map for it: sourcesContent with one node_modules
@@ -25,8 +26,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # A real SPA typically serves this exact same shell for both its own root and its
 # catch-all fallback, so root and "unknown path" are one body here too.
-SPA_HTML = (b'<html><body>SPA shell<script src="/app.js"></script>'
-            b'<script src="/mapped.js"></script></body></html>')
+SPA_HTML = (b'<html><body>SPA shell<a href="/login">login</a>'
+            b'<script src="/app.js"></script><script src="/mapped.js"></script>'
+            b'<script src="/missing.js"></script><script src="/json.js"></script></body></html>')
+LOGIN_HTML = (b'<html><body><form action="/api/auth/login" method="post">'
+              b'<input name="email"></form></body></html>')
 APP_JS = b'a.get("/api/data?limit=10");\na.post("/api/submit", {});\n'
 DATA_401 = b'{"error":"unauthorized"}'
 OBJECT_404 = b'{"error":"not found"}'
@@ -52,12 +56,18 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/":
             return 200, "text/html", SPA_HTML
+        if path == "/login":
+            return 200, "text/html", LOGIN_HTML
         if path == "/app.js":
             return 200, "application/javascript", APP_JS
         if path == "/mapped.js":
             return 200, "application/javascript", MAPPED_JS
         if path == "/mapped.js.map":
             return 200, "application/json", MAPPED_JS_MAP
+        if path == "/missing.js":
+            return 404, "text/plain", b"404 page not found"
+        if path == "/json.js":
+            return 200, "application/json", b'{"error":"not a bundle"}'
         if path == "/api/data":
             return 401, "application/json", DATA_401
         if path == "/api/objects/1":

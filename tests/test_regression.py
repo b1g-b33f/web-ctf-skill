@@ -109,6 +109,27 @@ class RegressionTest(unittest.TestCase):
             jsmine_path = os.path.join(tmp, "jsmine.txt")
             self.assertTrue(os.path.isfile(jsmine_path), "jsmine.txt was not written:\n" + out)
 
+    def test_jsharvest_rejects_http_error_bodies_as_bundles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = run("jsharvest.py", "--base", self.base_url, "--out", tmp)
+
+            self.assertFalse(os.path.exists(os.path.join(tmp, "missing.js")),
+                             "a 404 body must never be saved as a JavaScript bundle:\n" + out)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "json.js")),
+                             "a JSON error must never be saved as a JavaScript bundle:\n" + out)
+            self.assertIn("skipping", out)
+            self.assertIn("HTTP 404", out)
+
+    def test_jsharvest_crawls_rendered_forms_into_method_map(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = run("jsharvest.py", "--base", self.base_url, "--out", tmp,
+                      "--crawl-pages")
+
+            with open(os.path.join(tmp, "methods.txt"), encoding="utf-8") as fh:
+                methods = fh.read()
+            self.assertRegex(methods, r'POST\s+/api/auth/login',
+                             "server-rendered form action was not mined:\n" + out)
+
     def test_probe_classifies_public_error_and_auth_required_correctly(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths_file = os.path.join(tmp, "paths.txt")
@@ -151,6 +172,37 @@ class RegressionTest(unittest.TestCase):
             self.assertIn("HINT TEXT", out)
             self.assertIn("correcthorse", out,
                           "a plain-English hint sentence (not code-shaped) should surface here:\n" + out)
+
+    def test_ctf_init_preserves_worklog_and_harvests_public_forms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            challenge = "fixture-resume"
+            workdir = os.path.join(tmp, challenge)
+            os.makedirs(workdir)
+            worklog = os.path.join(workdir, "WORKLOG.md")
+            with open(worklog, "w", encoding="utf-8") as fh:
+                fh.write("sentinel live lead\n")
+
+            fake_bin = os.path.join(tmp, "bin")
+            os.makedirs(fake_bin)
+            ferox = os.path.join(fake_bin, "feroxbuster")
+            with open(ferox, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\nexit 0\n")
+            os.chmod(ferox, 0o755)
+
+            env = {**os.environ, "CTF_ROOT": tmp, "SECLISTS": tmp,
+                   "PATH": fake_bin + os.pathsep + os.environ.get("PATH", "")}
+            p = subprocess.run(
+                ["bash", os.path.join(SCRIPTS, "ctf-init.sh"), self.base_url,
+                 challenge, "bugforge"], capture_output=True, text=True,
+                timeout=30, env=env)
+            out = p.stdout + p.stderr
+            self.assertEqual(p.returncode, 0, out)
+            with open(worklog, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "sentinel live lead\n",
+                                 "ctf-init rerun overwrote the durable worklog:\n" + out)
+            with open(os.path.join(workdir, "recon", "methods.txt"), encoding="utf-8") as fh:
+                methods = fh.read()
+            self.assertRegex(methods, r'POST\s+/api/auth/login', out)
 
 
 class JwtquickWordlistChainTest(unittest.TestCase):
