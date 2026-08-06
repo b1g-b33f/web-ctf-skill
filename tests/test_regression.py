@@ -32,6 +32,12 @@ anywhere near, the real 104k/14M-line lists. Asserts:
   - a secret present only in the (fixture) rockyou list is still found by default
   - --wordlist pins a single list and does not fall through to the other
 
+JsmineDynamicRoutesTest guards the DYNAMIC ROUTES (.concat) matcher against the same
+adjacent-match-swallowing regression fixed once already in METHOD -> PATH (commit
+54d1701): a plain-group tail capture extends its own match's consumed span, so two
+.concat() calls separated only by a comma let the first match eat the second call site
+whole. No HTTP fixture needed — jsmine.py mines local files directly.
+
 Run directly: python3 tests/test_regression.py
 """
 import os
@@ -242,6 +248,29 @@ class JwtquickWordlistChainTest(unittest.TestCase):
         self.assertNotIn("escalating to rockyou", out,
                           "--wordlist must pin a single list, not chain:\n" + out)
         self.assertNotIn("SECRET =", out)
+
+
+class JsmineDynamicRoutesTest(unittest.TestCase):
+    """DYNAMIC ROUTES (.concat) must not lose a call site to a comma-adjacent neighbor.
+    METHOD -> PATH already uses a lookahead for this same shape and would find both
+    routes independently, so this checks the DYNAMIC ROUTES section specifically —
+    scoping to the whole output would let a regression here hide behind that pass."""
+
+    def test_adjacent_concat_calls_both_survive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "bundle.js"), "w", encoding="utf-8") as fh:
+                fh.write('a.get("/api/one/".concat(one)),a.get("/api/two/".concat(two));')
+
+            out = run("jsmine.py", tmp)
+
+            section = re.search(r'=== DYNAMIC ROUTES \(\.concat\).*?(?=\n===|\Z)', out, re.S)
+            self.assertIsNotNone(section, "DYNAMIC ROUTES section missing:\n" + out)
+            body = section.group(0)
+            self.assertIn("/api/one/{one}", body,
+                          "first concat call missing from DYNAMIC ROUTES:\n" + out)
+            self.assertIn("/api/two/{two}", body,
+                          "second concat call was swallowed by the first match's tail "
+                          "capture -- DYNAMIC ROUTES matcher regressed:\n" + out)
 
 
 if __name__ == "__main__":

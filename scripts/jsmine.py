@@ -65,8 +65,13 @@ def main():
     section("ROUTES", routes)
 
     # ---- .concat() dynamic route building -----------------------------------
-    # keep only the argument list, not the minified tail that follows it
-    concat = re.findall(r'["\'](/[%s]*)["\']\s*\.concat\(([^;\n]{0,90})' % PATH_CHARS, all_js)
+    # keep only the argument list, not the minified tail that follows it.
+    # Tail captured via a zero-width lookahead, not a plain group -- same
+    # reason as the METHOD -> PATH matcher below: a plain capture extends this
+    # match's own consumed span, and comma-adjacent calls (a.get(...),a.get(...))
+    # let the first match's 90-char tail swallow the second call site whole,
+    # so re.findall silently never saw it.
+    concat = re.findall(r'["\'](/[%s]*)["\']\s*\.concat\((?=([^;\n]{0,90}))' % PATH_CHARS, all_js)
     dyn = []
     for base, tail in concat:
         arg = re.split(r'\)\s*[,)\.]|\)\)', tail)[0]
