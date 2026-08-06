@@ -5,13 +5,17 @@
 Feroxbuster and nuclei take 1–5 minutes. **Do not block.** Launch and go straight to auth — login/register endpoints are known guesses, not something recon must discover first.
 
 ```bash
-mkdir -p ~/Tools/CTF/<challenge-name>/{recon,exploits,loot}
 bash ~/.claude/skills/web-ctf/scripts/ctf-init.sh <target> <challenge-name> <platform>
 ```
 
 Run that command in a retained execution session and let the tool yield a session id while
 you continue with auth. Do not add `nohup` or shell `&`: command runners may terminate detached
 children when the parent call returns. `ctf-init.sh` already parallelizes its slow jobs internally.
+
+`ctf-init.sh` scaffolds the whole workspace itself — `recon/`, `exploits/`, `loot/`, and a
+`WORKLOG.md` stub in the challenge root — no separate `mkdir` needed. That stub means
+`WORKLOG.md` already exists by the time you write to it: `Read` it first, or the edit tool
+will refuse the write as an unread file.
 
 Before anything else backgrounds, `ctf-init.sh` fetches the root page and runs `jsharvest.py`
 against it — see §2. Produces in `recon/`:

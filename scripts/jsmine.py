@@ -78,8 +78,29 @@ def main():
     # bundles minify the axios instance ($o.get, a.post, ...), so match any receiver
     calls = re.findall(r'[\w$]{1,4}\.(get|post|put|delete|patch)\s*\(\s*["\']'
                        r'(/[^"\']+)["\']', all_js)
+    # capture the concat() argument too: a base path with no trailing "/" is
+    # never a path-segment build (no API concats an id directly onto a bare
+    # word) -- it's a query-string builder ("?search=".concat(q)). Losing that
+    # argument here made the METHOD -> PATH line collapse both shapes to the
+    # same opaque "{...}", so probe.py's placeholder substitution blindly
+    # appended onto the bare word (/api/admin/posts{...} -> .../posts1, a
+    # route nothing serves) instead of testing .../posts?search=probe.
+    # The tail is captured via a zero-width lookahead, not a plain group: a
+    # plain 90-char capture extends the match itself, and minified code often
+    # packs a delete/post toggle pair (a follow button) within 90 chars of each
+    # other -- the first match's "tail" swallowed the second call site whole,
+    # so re.findall's next scan started past it and silently dropped the route.
     concat_calls = re.findall(r'[\w$]{1,4}\.(get|post|put|delete|patch)\s*\(\s*["\']'
-                              r'(/[^"\']+)["\']\s*\.concat', all_js)
+                              r'(/[^"\']+)["\']\s*\.concat\((?=([^;\n]{0,90}))', all_js)
+    concat_lines = []
+    for m, p, tail in concat_calls:
+        arg = re.split(r'\)\s*[,)\.]|\)\)', tail)[0]
+        qs = re.search(r'["\'](\?[a-zA-Z0-9_]+=)', arg)
+        if not p.endswith("/") and qs:
+            concat_lines.append("%-6s %s%sprobe" % (m.upper(), p, qs.group(1)))
+        else:
+            concat_lines.append("%-6s %s{...}" % (m.upper(), p))
+
     # Server-rendered apps often expose their complete route map as ordinary
     # HTML forms even when every linked JS asset is unavailable. Attribute order
     # is deliberately irrelevant here; method defaults to GET per HTML.
@@ -93,7 +114,7 @@ def main():
 
     section("METHOD -> PATH",
             ["%-6s %s" % (m.upper(), p) for m, p in calls]
-            + ["%-6s %s{...}" % (m.upper(), p) for m, p in concat_calls]
+            + concat_lines
             + forms)
 
     # ---- client router (reveals pages, hence features) ----------------------
