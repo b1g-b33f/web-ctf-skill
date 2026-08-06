@@ -209,21 +209,14 @@ non-fallback error on a status *other* than 401/403 — a real route, but not a 
 
 **Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
 
-A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/.claude/settings.json` — project settings resolve by walking *up* from cwd, so it must live at or above wherever the session actually started, never inside `$CTF_ROOT`) scans command results for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses. Verify it with a fake flag after changing tool surfaces or restarting the app; a stale matcher fails silently.
+A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/.claude/settings.json` — placement rules are in CLAUDE.md) scans command results for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses. Verify it with a fake flag after changing tool surfaces or restarting the app; a stale matcher fails silently.
 
 ## Environment
 
 Paths, tool invocations, and wordlists are in `~/Tools/CLAUDE.md` — that's already in context; don't re-derive it. Exploit scripts go in `~/Tools/Python/<challenge-name>/`. Recon output goes in `~/Tools/CTF/<challenge-name>/recon/`.
 
-Two shell rules that each cost a wasted round trip per solve:
-
-- **`cd` does not persist between Bash calls.** Save the token once to an absolute
-  path and read it absolutely every time — never rely on the working directory:
-  ```bash
-  echo "$TOKEN" > ~/Tools/CTF/<name>/token.txt
-  T=$(cat ~/Tools/CTF/<name>/token.txt)     # every subsequent call
-  ```
-- **macOS has no bare `python` command.** Only `python3` exists (confirm with
-  `which python3`) — every invocation in this skill, its references, and its scripts
-  uses `python3` for exactly this reason. If you paste a one-liner from an external
-  writeup that says `python`, translate it before running.
+CLAUDE.md's shell gotchas (`cd` not persisting, no bare `python`) bite hardest here.
+For `cd`: a `$TOKEN` set in one Bash call is gone in the next unless it's written to a
+file — `echo "$TOKEN" > ~/Tools/CTF/<name>/token.txt`, then `T=$(cat ...)` per call.
+For `python`: every invocation in this skill, its references, and its scripts uses
+`python3` — translate any pasted one-liner that says bare `python` before running it.
