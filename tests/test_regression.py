@@ -38,8 +38,18 @@ adjacent-match-swallowing regression fixed once already in METHOD -> PATH (commi
 .concat() calls separated only by a comma let the first match eat the second call site
 whole. No HTTP fixture needed — jsmine.py mines local files directly.
 
+The remaining classes below were merged from the Codex mirror's black-box harness
+regressions (tests/test_harness_regression.py in ~/.codex/skills/web-ctf) when its
+fixes were ported into this repo's scripts: quote/depth-aware .concat() argument
+parsing and template-literal mining in jsmine.py, skipped-write reporting in
+probe.py, the deny-baseline gate in jwtquick.py, byte-identical asset reuse in
+jsharvest.py, and feroxbuster progress capture in ctf-init.sh. Reused this repo's
+fixture_app.py server and make_jwt() helper instead of Codex's ad hoc inline
+HTTP server, so there is one fixture per HTTP-backed concern instead of two.
+
 Run directly: python3 tests/test_regression.py
 """
+import json
 import os
 import re
 import subprocess
@@ -58,6 +68,17 @@ def run(script, *args, timeout=60, env=None):
     run_env = {**os.environ, **env} if env else None
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=run_env)
     return p.stdout + p.stderr
+
+
+def run_full(script, *args, timeout=60, env=None, input_text=None):
+    """Like run(), but returns the CompletedProcess so callers can assert on
+    returncode as well as output — needed for the exit-code contracts added to
+    jwtquick.py (2 = inconclusive), probe.py (1 = no non-write targets given),
+    and flaghook.py (2 = flag detected)."""
+    cmd = [sys.executable, os.path.join(SCRIPTS, script)] + list(args)
+    run_env = {**os.environ, **env} if env else None
+    return subprocess.run(cmd, input=input_text, capture_output=True, text=True,
+                          timeout=timeout, env=run_env)
 
 
 def make_jwt(payload, secret):
@@ -210,6 +231,43 @@ class RegressionTest(unittest.TestCase):
                 methods = fh.read()
             self.assertRegex(methods, r'POST\s+/api/auth/login', out)
 
+    def test_ctf_init_captures_ferox_progress_in_ferox_log(self):
+        """feroxbuster's own -q/--silent flags still leave a startup banner and
+        per-hit lines on stdout; ctf-init.sh must redirect that into recon/ferox.log
+        (not the retained session's own stdout) so a long-running session stays
+        readable, while still summarizing pass/fail and a failure tail inline."""
+        with tempfile.TemporaryDirectory() as tmp:
+            challenge = "fixture-ferox-log"
+            fake_bin = os.path.join(tmp, "bin")
+            os.makedirs(fake_bin)
+            ferox = os.path.join(fake_bin, "feroxbuster")
+            with open(ferox, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\n")
+                fh.write("out=''\n")
+                fh.write("while [ $# -gt 0 ]; do\n")
+                fh.write("  if [ \"$1\" = '-o' ]; then shift; out=\"$1\"; fi\n")
+                fh.write("  shift\n")
+                fh.write("done\n")
+                fh.write("echo FEROX_PROGRESS_NOISE\n")
+                fh.write("echo '200      GET       10l       20w      300c http://fixture/health' > \"$out\"\n")
+            os.chmod(ferox, 0o755)
+
+            env = {**os.environ, "CTF_ROOT": tmp, "SECLISTS": tmp,
+                   "PATH": fake_bin + os.pathsep + os.environ.get("PATH", "")}
+            p = subprocess.run(
+                ["bash", os.path.join(SCRIPTS, "ctf-init.sh"), self.base_url,
+                 challenge, "bugforge"], capture_output=True, text=True,
+                timeout=30, env=env)
+            out = p.stdout + p.stderr
+            self.assertEqual(p.returncode, 0, out)
+            self.assertNotIn("FEROX_PROGRESS_NOISE", out,
+                             "feroxbuster's live progress leaked into ctf-init.sh's own "
+                             "terminal/session output instead of staying in ferox.log:\n" + out)
+            log_path = os.path.join(tmp, challenge, "recon", "ferox.log")
+            with open(log_path, encoding="utf-8") as fh:
+                self.assertIn("FEROX_PROGRESS_NOISE", fh.read(),
+                             "feroxbuster's progress must still be captured in recon/ferox.log")
+
 
 class JwtquickWordlistChainTest(unittest.TestCase):
     """jwtquick.py's default crack is a two-stage chain: the JWT-specific list first,
@@ -271,6 +329,217 @@ class JsmineDynamicRoutesTest(unittest.TestCase):
             self.assertIn("/api/two/{two}", body,
                           "second concat call was swallowed by the first match's tail "
                           "capture -- DYNAMIC ROUTES matcher regressed:\n" + out)
+
+
+JSMINE_ROUTE_BUNDLE = r'''
+axios.get(`/api/snippets/${id}/comments`);
+a.post("/api/snippets/".concat(id,"/comments"));
+a.delete("/api/snippets/".concat(id,"/like"));
+a.get("/api/admin/posts".concat("?search=",term));
+a.get("/api/one/".concat(one)),a.get("/api/two/".concat(two));
+//# sourceMappingURL=app.js.map
+'''
+
+
+class JsmineRouteExtractionTest(unittest.TestCase):
+    """A regex split on .concat()'s first ')' only ever saw a bare {arg} placeholder,
+    so a fixed literal suffix like "/comments" or "/like" was dropped, template-literal
+    call sites (axios.get(`/api/x/${id}`)) were never mined at all, and a query-string
+    builder ("?search=".concat(term)) rendered as an unprobeable {...} instead of a
+    live ?search=probe value. Fixed by a quote/depth-aware argument scanner
+    (parse_call_args/concat_route in jsmine.py)."""
+
+    def test_preserves_template_and_concat_suffixes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "bundle.js"), "w", encoding="utf-8") as fh:
+                fh.write(JSMINE_ROUTE_BUNDLE)
+            proc = run_full("jsmine.py", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            section = re.search(r'=== METHOD -> PATH.*?(?=\n===|\Z)', proc.stdout, re.S)
+            self.assertIsNotNone(section, proc.stdout)
+            body = section.group(0)
+            self.assertIn("=== METHOD -> PATH (6) ===", body)
+            self.assertIn("GET    /api/snippets/{...}/comments", body,
+                         "template-literal HTTP call was not mined:\n" + body)
+            self.assertIn("POST   /api/snippets/{...}/comments", body,
+                         "fixed .concat() suffix '/comments' was not preserved:\n" + body)
+            self.assertIn("DELETE /api/snippets/{...}/like", body,
+                         "fixed .concat() suffix '/like' was not preserved:\n" + body)
+            self.assertIn("GET    /api/admin/posts?search=probe", body,
+                         "query-string .concat() builder was not rendered as a probeable "
+                         "value:\n" + body)
+            self.assertIn("GET    /api/one/{...}", body)
+            self.assertIn("GET    /api/two/{...}", body,
+                         "second of two comma-adjacent .concat() calls was swallowed:\n" + body)
+
+    def test_concat_depth_aware_nested_arguments(self):
+        """A comma buried inside a nested call or array literal must not fracture
+        the top-level argument list, and an id wrapped in encodeURIComponent(...)
+        must not truncate the trailing literal suffix."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "bundle.js"), "w", encoding="utf-8") as fh:
+                fh.write('a.get("/api/nested/".concat(["a","b"].join(","), "/details"));\n'
+                        'a.get("/api/enc/".concat(encodeURIComponent(id), "/edit"));\n')
+            proc = run_full("jsmine.py", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            section = re.search(r'=== METHOD -> PATH.*?(?=\n===|\Z)', proc.stdout, re.S)
+            self.assertIsNotNone(section, proc.stdout)
+            body = section.group(0)
+            self.assertIn("GET    /api/nested/{...}/details", body,
+                         "comma inside a nested array/call fractured the argument list:\n" + body)
+            self.assertIn("GET    /api/enc/{...}/edit", body,
+                         "encodeURIComponent(...) wrapper broke suffix extraction:\n" + body)
+
+
+class JsmineSectionHeaderCountTest(unittest.TestCase):
+    """Section headers must count the unique lines actually displayed. jsmine dedupes
+    for display (sorted(set(items))) but used to count len(items) before dedup, so a
+    route matched twice (e.g. named in both a minified bundle and its exploded source
+    map) inflated the header past what was actually printed."""
+
+    def test_duplicate_matches_collapse_to_one_and_header_agrees(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "bundle.js"), "w", encoding="utf-8") as fh:
+                fh.write('a.get("/api/dup");\na.get("/api/dup");\na.get("/api/other");\n')
+            proc = run_full("jsmine.py", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            section = re.search(r'=== METHOD -> PATH.*?(?=\n===|\Z)', proc.stdout, re.S)
+            self.assertIsNotNone(section, proc.stdout)
+            body = section.group(0)
+            self.assertIn("=== METHOD -> PATH (2) ===", body, body)
+            displayed = [l for l in body.splitlines()[1:] if l.strip()]
+            self.assertEqual(len(displayed), 2,
+                             "header count must equal the number of lines actually shown:\n" + body)
+
+
+class ProbeSkippedWriteTest(unittest.TestCase):
+    """PUT/PATCH/DELETE targets mutate state, so probe.py holds them back unless
+    --write is passed. They must not vanish silently — an operator needs to see what
+    was held back (and why) instead of assuming the harness probed everything it was
+    given."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_write_targets_skipped_and_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = os.path.join(tmp, "paths.txt")
+            with open(paths, "w", encoding="utf-8") as fh:
+                fh.write("GET /api/data\n")
+                fh.write("DELETE /api/objects/1\n")
+                fh.write("PUT /api/objects/1\n")
+            proc = run_full("probe.py", "--base", self.base_url, "--token", "faketoken",
+                            "--paths", paths, "--out", os.path.join(tmp, "out"))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("skipped 2 write target(s)", proc.stdout)
+            self.assertRegex(proc.stdout, r'SKIPPED\s+DELETE\s+/api/objects/1')
+            self.assertRegex(proc.stdout, r'SKIPPED\s+PUT\s+/api/objects/1')
+            self.assertIn("require --write", proc.stdout)
+
+    def test_only_write_targets_reports_a_useful_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = os.path.join(tmp, "paths.txt")
+            with open(paths, "w", encoding="utf-8") as fh:
+                fh.write("DELETE /api/objects/1\n")
+                fh.write("PUT /api/objects/1\n")
+            proc = run_full("probe.py", "--base", self.base_url, "--token", "faketoken",
+                            "--paths", paths, "--out", os.path.join(tmp, "out"))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("skipped 2 write target(s)", proc.stdout,
+                          "the skip report must still print even when nothing else is probed")
+            self.assertIn("no non-write paths given", proc.stdout)
+
+
+class JwtquickBaselineRejectionTest(unittest.TestCase):
+    """--test must point at a route that actually denies the caller's own token before
+    any forged candidate is fired. Firing candidates against a baseline that never
+    denied you (a public route, an SPA fallback, a timed-out request, or a request
+    that failed outright) can't distinguish a real bypass from a route that was never
+    protected in the first place -- so all of those must short-circuit to INCONCLUSIVE
+    (exit 2) instead of printing a forged-token verdict."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_non_denying_baseline_is_inconclusive(self):
+        # fixture_app answers "/" with a 200 SPA shell for everyone -- never a denial
+        token = make_jwt({"id": 1, "role": "user"}, "irrelevant")
+        proc = run_full("jwtquick.py", "--token", token, "--no-crack",
+                        "--base", self.base_url, "--test", "/")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("INCONCLUSIVE", proc.stdout)
+        self.assertIn("must be a route that refuses the original token", proc.stdout)
+        self.assertNotIn("firing", proc.stdout,
+                         "forged candidates must never fire against an unproven baseline")
+
+    def test_unreachable_baseline_is_inconclusive(self):
+        # port 1 on loopback: nothing listens there, so this fails fast (ECONNREFUSED)
+        # rather than waiting out jwtquick's own 20s request timeout
+        token = make_jwt({"id": 1, "role": "user"}, "irrelevant")
+        proc = run_full("jwtquick.py", "--token", token, "--no-crack",
+                        "--base", "http://127.0.0.1:1", "--test", "/", timeout=30)
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("INCONCLUSIVE", proc.stdout)
+        self.assertNotIn("firing", proc.stdout)
+
+
+class JsharvestReharvestTest(unittest.TestCase):
+    """A second jsharvest.py pass over the same --out dir (e.g. re-running after
+    login) must reuse a byte-identical bundle/source map instead of piling up
+    app_2.js / mapped.js_2.map copies of content that hasn't changed -- only
+    genuinely new or changed content should get a versioned filename."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_identical_assets_are_reused_not_versioned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = run_full("jsharvest.py", "--base", self.base_url, "--out", tmp)
+            second = run_full("jsharvest.py", "--base", self.base_url, "--out", tmp)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "app.js")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "mapped.js")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "mapped.js.map")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "app_2.js")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "mapped_2.js")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "mapped.js_2.map")))
+            self.assertIn("reused 3 identical asset(s)", second.stdout,
+                          second.stdout + second.stderr)
+
+
+class FlaghookSyntheticDetectionTest(unittest.TestCase):
+    """flaghook.py is the PostToolUse safety net that scans every tool result for a
+    flag pattern; SKILL.md tells an operator to 'verify it with a fake flag after
+    changing tool surfaces'. This exercises that verification path directly: a
+    synthetic flag anywhere in the hook's stdin payload must exit 2 (surfacing
+    stderr back to Claude) and land in ~/.claude/ctf-flags.log."""
+
+    def test_synthetic_flag_in_tool_output_is_detected_and_logged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = "bug{HarnessRegressionSynthetic123}"
+            payload = json.dumps({"tool_name": "Bash", "tool_response": marker})
+            proc = run_full("flaghook.py", input_text=payload, env={"HOME": tmp})
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            log = os.path.join(tmp, ".claude", "ctf-flags.log")
+            self.assertTrue(os.path.isfile(log), "flaghook did not create ctf-flags.log")
+            with open(log, encoding="utf-8") as fh:
+                self.assertIn(marker, fh.read())
 
 
 if __name__ == "__main__":

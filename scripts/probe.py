@@ -80,7 +80,7 @@ def fetch(sess, url, headers, method="GET", timeout=20):
 
 def parse_targets(raw, include_write, ident):
     """Accept both '/api/x' and 'POST /api/x'. jsmine emits both shapes."""
-    targets, seen = [], set()
+    targets, skipped_writes, seen = [], [], set()
     for line in raw.splitlines():
         parts = line.strip().split()
         if not parts:
@@ -92,6 +92,7 @@ def parse_targets(raw, include_write, ident):
         else:
             continue
         if method in WRITE_METHODS and not include_write:
+            skipped_writes.append((method, path))
             continue
         path = re.sub(r'\{[^}]*\}', ident, path)      # /api/orders/{...} -> /api/orders/1
         if "{" in path or "}" in path:
@@ -100,7 +101,7 @@ def parse_targets(raw, include_write, ident):
         if key not in seen:
             seen.add(key)
             targets.append(key)
-    return targets
+    return targets, skipped_writes
 
 
 def describe(r):
@@ -147,9 +148,16 @@ def main():
 
     base = a.base.rstrip("/")
     raw = sys.stdin.read() if a.paths == "-" else open(a.paths, encoding="utf-8").read()
-    targets = parse_targets(raw, a.write, a.id)
+    targets, skipped_writes = parse_targets(raw, a.write, a.id)
+    if skipped_writes:
+        unique_skipped = list(dict.fromkeys(skipped_writes))
+        print("[!] skipped %d write target(s); PUT/PATCH/DELETE require --write because they mutate state"
+              % len(unique_skipped))
+        for method, path in unique_skipped:
+            print("    SKIPPED %-6s %s" % (method, path))
+        print("[!] review object IDs and payloads before rerunning with --write\n")
     if not targets:
-        print("no paths given")
+        print("no non-write paths given")
         return 1
     os.makedirs(a.out, exist_ok=True)
 

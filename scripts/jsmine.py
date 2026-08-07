@@ -8,12 +8,97 @@ Usage:
 Catches the things hand-rolled regexes miss: query-string routes, template-literal
 and .concat() route building, and the client router table.
 """
+import ast
 import glob
 import os
 import re
 import sys
 
 PATH_CHARS = r"a-zA-Z0-9/_\-?=&.:{}$"
+
+
+def parse_call_args(tail):
+    """Return the top-level arguments from text immediately after ``concat(``.
+
+    Minified bundles commonly build routes as ``.concat(id,"/comments")``.
+    A regex split on the first closing parenthesis loses nested expressions such
+    as ``encodeURIComponent(id)``, so keep a tiny quote/depth-aware scanner here.
+    """
+    args, buf, depth = [], [], 0
+    quote, escaped = None, False
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    closers = set(pairs.values())
+    for ch in tail:
+        if quote:
+            buf.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "'\"`":
+            quote = ch
+            buf.append(ch)
+        elif ch in pairs:
+            depth += 1
+            buf.append(ch)
+        elif ch in closers:
+            if ch == ")" and depth == 0:
+                break
+            depth = max(0, depth - 1)
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            args.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if buf or args:
+        args.append("".join(buf).strip())
+    return [arg for arg in args if arg]
+
+
+def literal_string(expr):
+    expr = expr.strip()
+    if len(expr) < 2 or expr[0] not in "'\"`" or expr[-1] != expr[0]:
+        return None
+    if expr[0] == "`":
+        return None if "${" in expr else expr[1:-1]
+    try:
+        value = ast.literal_eval(expr)
+        return value if isinstance(value, str) else None
+    except (SyntaxError, ValueError):
+        return None
+
+
+def concat_route(base, tail, named=False):
+    """Reconstruct a route from a minified ``.concat(...)`` call.
+
+    The diagnostic DYNAMIC ROUTES section retains simple argument names because
+    they help an analyst correlate adjacent call sites. METHOD -> PATH stays
+    directly probeable by using ``{...}`` and ``probe`` placeholders.
+    """
+    route = base
+    args = parse_call_args(tail)
+    if not args:
+        return route + "{...}"
+    for arg in args:
+        literal = literal_string(arg)
+        if literal is not None:
+            route += literal
+        elif named:
+            dynamic = re.sub(r'\s+', ' ', arg).strip()[:60]
+            route += "{%s}" % dynamic
+        elif re.search(r'(?:\?|&)[a-zA-Z0-9_.-]+=$', route):
+            route += "probe"
+        else:
+            route += "{...}"
+    return route
+
+
+def template_route(path):
+    return re.sub(r'\$\{[^}]+\}', '{...}', path)
 
 
 def load(args):
@@ -35,9 +120,9 @@ def load(args):
 
 
 def section(title, items, limit=400):
-    items = [i for i in items if i]
+    items = sorted(set(i for i in items if i))
     print("\n=== %s (%d) ===" % (title, len(items)))
-    for i in sorted(set(items))[:limit]:
+    for i in items[:limit]:
         print("  " + str(i)[:200])
 
 
@@ -65,46 +150,34 @@ def main():
     section("ROUTES", routes)
 
     # ---- .concat() dynamic route building -----------------------------------
-    # keep only the argument list, not the minified tail that follows it.
-    # Tail captured via a zero-width lookahead, not a plain group -- same
-    # reason as the METHOD -> PATH matcher below: a plain capture extends this
-    # match's own consumed span, and comma-adjacent calls (a.get(...),a.get(...))
-    # let the first match's 90-char tail swallow the second call site whole,
-    # so re.findall silently never saw it.
+    # Keep the tail in a zero-width lookahead so adjacent minified calls are not
+    # swallowed. Reconstruct literal suffix arguments such as "/comments".
     concat = re.findall(r'["\'](/[%s]*)["\']\s*\.concat\((?=([^;\n]{0,90}))' % PATH_CHARS, all_js)
-    dyn = []
-    for base, tail in concat:
-        arg = re.split(r'\)\s*[,)\.]|\)\)', tail)[0]
-        arg = re.sub(r'\s+', ' ', arg).strip()[:60]
-        dyn.append("%s{%s}" % (base, arg))
+    dyn = [concat_route(base, tail, named=True) for base, tail in concat]
     section("DYNAMIC ROUTES (.concat)", dyn)
 
     # ---- HTTP methods per path ---------------------------------------------
-    # bundles minify the axios instance ($o.get, a.post, ...), so match any receiver
-    calls = re.findall(r'[\w$]{1,4}\.(get|post|put|delete|patch)\s*\(\s*["\']'
-                       r'(/[^"\']+)["\']', all_js)
-    # capture the concat() argument too: a base path with no trailing "/" is
-    # never a path-segment build (no API concats an id directly onto a bare
-    # word) -- it's a query-string builder ("?search=".concat(q)). Losing that
-    # argument here made the METHOD -> PATH line collapse both shapes to the
-    # same opaque "{...}", so probe.py's placeholder substitution blindly
-    # appended onto the bare word (/api/admin/posts{...} -> .../posts1, a
-    # route nothing serves) instead of testing .../posts?search=probe.
-    # The tail is captured via a zero-width lookahead, not a plain group: a
-    # plain 90-char capture extends the match itself, and minified code often
-    # packs a delete/post toggle pair (a follow button) within 90 chars of each
-    # other -- the first match's "tail" swallowed the second call site whole,
-    # so re.findall's next scan started past it and silently dropped the route.
-    concat_calls = re.findall(r'[\w$]{1,4}\.(get|post|put|delete|patch)\s*\(\s*["\']'
+    # Bundles minify the axios instance ($o.get, a.post, ...), while exploded
+    # source maps retain longer names such as axios. Mine ordinary quoted calls
+    # and template literals; exclude quoted bases immediately followed by
+    # .concat(), which are reconstructed below.
+    calls = re.findall(r'[\w$]{1,32}\.(get|post|put|delete|patch)\s*\(\s*(["\'])'
+                       r'(/[^"\']+)\2(?!\s*\.concat\()', all_js)
+    call_lines = ["%-6s %s" % (method.upper(), path) for method, _, path in calls]
+    template_calls = re.findall(
+        r'[\w$]{1,32}\.(get|post|put|delete|patch)\s*\(\s*`(/[^`]+)`', all_js)
+    template_lines = ["%-6s %s" % (method.upper(), template_route(path))
+                      for method, path in template_calls]
+    # Capture the concat() argument too. A base path with no trailing "/" is
+    # a query-string builder when its tail contains a quoted ?param= literal;
+    # resolve that shape now so probe.py does not substitute its path id into
+    # the bare word (/api/admin/posts{...} -> /api/admin/posts1).
+    # Keep the tail in a zero-width lookahead: consuming it can swallow a nearby
+    # minified call site and silently drop the next route from re.findall().
+    concat_calls = re.findall(r'[\w$]{1,32}\.(get|post|put|delete|patch)\s*\(\s*["\']'
                               r'(/[^"\']+)["\']\s*\.concat\((?=([^;\n]{0,90}))', all_js)
-    concat_lines = []
-    for m, p, tail in concat_calls:
-        arg = re.split(r'\)\s*[,)\.]|\)\)', tail)[0]
-        qs = re.search(r'["\'](\?[a-zA-Z0-9_]+=)', arg)
-        if not p.endswith("/") and qs:
-            concat_lines.append("%-6s %s%sprobe" % (m.upper(), p, qs.group(1)))
-        else:
-            concat_lines.append("%-6s %s{...}" % (m.upper(), p))
+    concat_lines = ["%-6s %s" % (method.upper(), concat_route(path, tail))
+                    for method, path, tail in concat_calls]
 
     # Server-rendered apps often expose their complete route map as ordinary
     # HTML forms even when every linked JS asset is unavailable. Attribute order
@@ -118,7 +191,8 @@ def main():
             forms.append("%-6s %s" % (attrs.get("method", "GET").upper(), action))
 
     section("METHOD -> PATH",
-            ["%-6s %s" % (m.upper(), p) for m, p in calls]
+            call_lines
+            + template_lines
             + concat_lines
             + forms)
 

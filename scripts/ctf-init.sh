@@ -131,11 +131,15 @@ JOB_QUICK=$!
 # ── Job 3: feroxbuster directory brute-force ─────────────────────────────────
 (
   echo "[job:ferox] starting"
-  feroxbuster -u "$TARGET" \
+  if feroxbuster -u "$TARGET" \
     -w "$SECLISTS/Discovery/Web-Content/raft-medium-directories.txt" \
     --depth 2 -t 20 --timeout 8 -q \
-    -o "$RECON/ferox.txt" 2>/dev/null
-  echo "[job:ferox] done — $(grep -cE '^[0-9]{3} ' "$RECON/ferox.txt" 2>/dev/null || echo 0) hits"
+    -o "$RECON/ferox.txt" > "$RECON/ferox.log" 2>&1; then
+    echo "[job:ferox] done — $(grep -cE '^[0-9]{3} ' "$RECON/ferox.txt" 2>/dev/null || echo 0) hits"
+  else
+    echo "[job:ferox] failed — see recon/ferox.log"
+    tail -5 "$RECON/ferox.log" 2>/dev/null
+  fi
 ) &
 JOB_FEROX=$!
 

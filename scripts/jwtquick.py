@@ -157,10 +157,20 @@ def main():
         sys.exit("[!] pip install requests")
 
     url = a.base.rstrip("/") + a.test
-    base_r = requests.get(url, headers={"Authorization": "Bearer " + a.token}, verify=False)
+    try:
+        base_r = requests.get(url, headers={"Authorization": "Bearer " + a.token},
+                              verify=False, timeout=20)
+    except Exception as e:
+        print(f"\n[!] INCONCLUSIVE: baseline request failed for {url}: {e}")
+        return 2
     base_denied = looks_denial(base_r.status_code, base_r.text)
     print(f"\n[*] baseline with your own token: {base_r.status_code} ({len(base_r.content)}b) "
           f"[{'denied' if base_denied else 'NOT denied'}] {short_summary(base_r)}")
+    if not base_denied:
+        print("[!] INCONCLUSIVE: --test must be a route that refuses the original token. "
+              "This response may be a public route or SPA fallback; forged-token verdicts "
+              "would not establish a bypass.")
+        return 2
     print(f"[*] firing {len(cands)} candidates at {url}\n")
     for name, t in cands:
         try:
@@ -191,4 +201,4 @@ def main():
             print(f"      TOKEN {t}")
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

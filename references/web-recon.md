@@ -28,7 +28,7 @@ against it — see §2. Produces in `recon/`:
 | `methods.txt` | `jsharvest.py` | just the `METHOD -> PATH` lines, ready to pipe into `probe.py` |
 | `fallback.headers`, `fallback.body` | `quickrecon.py` | the calibration response the meta/quickcheck jobs compared everything against |
 | `meta_hits.txt`, `quickcheck_hits.txt` | `quickrecon.py` | real hits only, as `status size content-type URL`, SPA fallback and framework-404s already suppressed |
-| `ferox.txt`, `nuclei.txt` | feroxbuster/nuclei | (nuclei skipped on bugforge, whose labs are anti-bot instrumented) |
+| `ferox.txt`, `ferox.log`, `nuclei.txt` | feroxbuster/nuclei | Results stay in `ferox.txt`; live progress/errors stay in `ferox.log` so retained sessions remain readable. Nuclei is skipped on BugForge, whose labs are anti-bot instrumented. |
 
 When you check back:
 - `Server` / `X-Powered-By` → framework. **Treat as untrusted** — some labs rotate it per response to poison fingerprinting.

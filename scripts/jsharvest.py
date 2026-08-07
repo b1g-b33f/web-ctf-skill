@@ -162,6 +162,28 @@ def safe_filename(url, used):
     return cand
 
 
+def asset_filename(url, used, out_dir, content):
+    """Choose a stable filename and reuse a byte-identical prior harvest.
+
+    Authenticated re-harvests frequently fetch the same hashed SPA bundle. Keep
+    the accumulated corpus when content changes, but do not create `_2`, `_3`,
+    ... copies of an asset that is already present unchanged.
+    """
+    base = os.path.basename(urlsplit(url).path) or "bundle.js"
+    existing = os.path.join(out_dir, base)
+    if base in used and os.path.isfile(existing):
+        try:
+            with open(existing, encoding="utf-8", errors="replace") as fh:
+                if fh.read() == content:
+                    return base, True
+        except OSError:
+            pass
+    if base not in used:
+        used.add(base)
+        return base, False
+    return safe_filename(url, used), False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
@@ -259,18 +281,22 @@ def main():
     print("[*] %d .js/.mjs bundle(s) to download" % len(js_urls))
 
     used_names = set(os.path.basename(p) for p in glob.glob(os.path.join(a.out, "*")))
-    downloaded, maps, skipped = 0, 0, 0
+    downloaded, maps, reused, skipped = 0, 0, 0, 0
     for url in js_urls:
         r = fetch(sess, url, headers)
         if not usable_asset(r, url):
             skipped += 1
             continue
-        fn = safe_filename(url, used_names)
+        fn, was_reused = asset_filename(url, used_names, a.out, r.text)
         path = os.path.join(a.out, fn)
-        with open(path, "w", encoding="utf-8", errors="replace") as fh:
-            fh.write(r.text)
-        downloaded += 1
-        print("  [+] %s -> %s (%d bytes)" % (url, fn, len(r.text)))
+        if was_reused:
+            reused += 1
+            print("  [=] %s -> %s (identical; reused)" % (url, fn))
+        else:
+            with open(path, "w", encoding="utf-8", errors="replace") as fh:
+                fh.write(r.text)
+            downloaded += 1
+            print("  [+] %s -> %s (%d bytes)" % (url, fn, len(r.text)))
 
         m = SOURCEMAP.search(r.text[-2000:]) or SOURCEMAP.search(r.text)
         if m:
@@ -281,12 +307,16 @@ def main():
                 map_url = urljoin(url, map_ref)
                 mr = fetch(sess, map_url, headers)
                 if usable_asset(mr, map_url, kind="source map"):
-                    map_fn = safe_filename(map_url, used_names)
+                    map_fn, map_reused = asset_filename(map_url, used_names, a.out, mr.text)
                     map_path = os.path.join(a.out, map_fn)
-                    with open(map_path, "w", encoding="utf-8", errors="replace") as fh:
-                        fh.write(mr.text)
-                    maps += 1
-                    print("      sourceMappingURL -> %s (%d bytes)" % (map_fn, len(mr.text)))
+                    if map_reused:
+                        reused += 1
+                        print("      sourceMappingURL -> %s (identical; reused)" % map_fn)
+                    else:
+                        with open(map_path, "w", encoding="utf-8", errors="replace") as fh:
+                            fh.write(mr.text)
+                        maps += 1
+                        print("      sourceMappingURL -> %s (%d bytes)" % (map_fn, len(mr.text)))
 
                     extracted = extract_sourcemap(map_path, a.out)
                     if extracted:
@@ -295,8 +325,9 @@ def main():
                         for p in sorted(extracted):
                             print("          " + p)
 
-    print("[*] downloaded %d bundle(s), skipped %d invalid bundle(s), %d source map(s)" %
-          (downloaded, skipped, maps))
+    print("[*] downloaded %d bundle(s), reused %d identical asset(s), "
+          "skipped %d invalid bundle(s), %d new source map(s)" %
+          (downloaded, reused, skipped, maps))
 
     proc = subprocess.run([sys.executable, JSMINE, a.out], capture_output=True, text=True)
     jsmine_out = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
