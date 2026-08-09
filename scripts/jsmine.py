@@ -203,7 +203,11 @@ def main():
     secrets = re.findall(
         r'(?i)(?:password|passwd|secret|apikey|api_key|access_key|token|privatekey|client_secret)'
         r'\s*[:=]\s*["\'`]([^"\'`\s]{6,})["\'`]', all_js)
-    section("SECRETS", [s for s in secrets if not s.startswith(("function", "undefined"))])
+    library_secret_noise = re.compile(
+        r'(?:SECRET_)?DO_NOT_(?:PASS_THIS|USE)_OR_YOU_WILL_BE_FIRED', re.I)
+    section("SECRETS", [s for s in secrets
+                        if not s.startswith(("function", "undefined"))
+                        and not library_secret_noise.fullmatch(s)])
 
     # ---- comments -----------------------------------------------------------
     kw = ("todo", "fixme", "hack", "password", "admin", "debug", "flag", "secret",

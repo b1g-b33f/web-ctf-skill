@@ -201,15 +201,20 @@ grep -a 'HIT\|FLAG' ~/Tools/CTF/<challenge-name>/oob.log
 
 `probe.py` verdicts: `not-a-route` (calibrated fallback body, per method, or a framework 404),
 `auth-required` (401/403, or identical denial with and without a token), `public-error` (identical
-non-fallback error on a status *other* than 401/403 — a real route, but not a leak), and
+non-fallback error on a status *other* than 401/403 — a real route, but not a leak),
+`public-endpoint` (a generic login/register/reset envelope expected before authentication), and
 `NO-AUTH LEAK` / `NO-AUTH DATA` — broken access control, found deliberately rather than by accident.
+With `--methods`, `Allow` is route-specific; `CORS policy` is only the server's advertised
+cross-origin verb policy and does not prove that handlers exist for those verbs.
 
 `jwtquick.py` tags each candidate `rejected` (still denies — a reworded message is not progress),
 `POSSIBLE BYPASS` (the baseline denial is gone), or `FLAG` (unconditional success, any status).
 
 **Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
 
-A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/.claude/settings.json` — placement rules are in CLAUDE.md) scans command results for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses. Verify it with a fake flag after changing tool surfaces or restarting the app; a stale matcher fails silently.
+A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/.claude/settings.json` — placement rules are in CLAUDE.md) scans command results for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
+
+**Verify hook activation end-to-end after every app restart or tool-surface change.** In one tool call, print a unique `bug{CodexHarnessHookCheck_<nonce>}` marker; in the next tool call, verify that exact marker landed in `~/.claude/ctf-flaghook-ok`. The hook treats this marker as a health check, not a real flag, so it never touches `ctf-flags.log`. Invoking `flaghook.py` directly proves only the script is correct, not that `PostToolUse` actually fires — a stale or untrusted hook config fails silently. If the sentinel is absent, record `flag hook inactive` in `WORKLOG.md` and keep scanning every response manually.
 
 ## Environment
 

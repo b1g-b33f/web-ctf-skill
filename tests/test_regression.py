@@ -47,6 +47,16 @@ jsharvest.py, and feroxbuster progress capture in ctf-init.sh. Reused this repo'
 fixture_app.py server and make_jwt() helper instead of Codex's ad hoc inline
 HTTP server, so there is one fixture per HTTP-backed concern instead of two.
 
+A second batch (ProbePublicAuthEnvelopeTest, JsmineSecretSentinelTest,
+FlaghookHealthMarkerTest, and the quickcheck_hits.txt assertion added to
+test_ctf_init_captures_ferox_progress_in_ferox_log) was ported the same way
+after a live run against Shady Oaks Financial: probe.py mislabeled a public
+forgot-password envelope as a leak and printed CORS policy as route-specific
+Allow, jsmine.py flagged React's runtime sentinel as an application secret,
+flaghook.py had no way to prove PostToolUse was actually invoking it, and
+ctf-init.sh's quickcheck job never reached /api/stocks/search because /api
+itself is the SPA fallback.
+
 Run directly: python3 tests/test_regression.py
 """
 import json
@@ -235,7 +245,12 @@ class RegressionTest(unittest.TestCase):
         """feroxbuster's own -q/--silent flags still leave a startup banner and
         per-hit lines on stdout; ctf-init.sh must redirect that into recon/ferox.log
         (not the retained session's own stdout) so a long-running session stays
-        readable, while still summarizing pass/fail and a failure tail inline."""
+        readable, while still summarizing pass/fail and a failure tail inline.
+
+        Also covers the quickcheck job's direct protected-leaf guesses: /api itself
+        is the SPA fallback here, so a recursive fuzzer never reaches a nested leaf
+        like /api/stocks/search -- only a direct guess against its unauthenticated
+        401 existence oracle finds it."""
         with tempfile.TemporaryDirectory() as tmp:
             challenge = "fixture-ferox-log"
             fake_bin = os.path.join(tmp, "bin")
@@ -267,6 +282,13 @@ class RegressionTest(unittest.TestCase):
             with open(log_path, encoding="utf-8") as fh:
                 self.assertIn("FEROX_PROGRESS_NOISE", fh.read(),
                              "feroxbuster's progress must still be captured in recon/ferox.log")
+
+            quickcheck_hits = os.path.join(tmp, challenge, "recon", "quickcheck_hits.txt")
+            with open(quickcheck_hits, encoding="utf-8") as fh:
+                self.assertIn("/api/stocks/search", fh.read(),
+                             "direct protected-leaf guess missing from quickcheck_hits.txt -- "
+                             "recursive fuzzing alone cannot reach a leaf below an SPA-fallback "
+                             "/api, so ctf-init.sh's quickcheck job must guess it directly")
 
 
 class JwtquickWordlistChainTest(unittest.TestCase):
@@ -412,6 +434,28 @@ class JsmineSectionHeaderCountTest(unittest.TestCase):
                              "header count must equal the number of lines actually shown:\n" + body)
 
 
+class JsmineSecretSentinelTest(unittest.TestCase):
+    """React's runtime sentinel value (SECRET_DO_NOT_PASS_THIS_OR_YOU_WILL_BE_FIRED,
+    injected by react-dom to catch code that reads its internal shared state) matches
+    the SECRETS regex's generic key=value shape and isn't an application secret.
+    jsmine.py flagged it as one on the Shady Oaks Financial bundle. Filtering it out
+    must stay narrow enough that a genuine api_secret="pumpkin"-style value survives."""
+
+    def test_jsmine_filters_react_secret_sentinel_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "bundle.js"), "w", encoding="utf-8") as fh:
+                fh.write('const secret="SECRET_DO_NOT_PASS_THIS_OR_YOU_WILL_BE_FIRED";\n')
+                fh.write('const api_secret="pumpkin";\n')
+            proc = run_full("jsmine.py", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            section = re.search(r'=== SECRETS.*?(?=\n===|\Z)', proc.stdout, re.S)
+            self.assertIsNotNone(section, proc.stdout)
+            body = section.group(0)
+            self.assertIn("=== SECRETS (1) ===", body)
+            self.assertIn("pumpkin", body)
+            self.assertNotIn("DO_NOT_PASS_THIS_OR_YOU_WILL_BE_FIRED", body)
+
+
 class ProbeSkippedWriteTest(unittest.TestCase):
     """PUT/PATCH/DELETE targets mutate state, so probe.py holds them back unless
     --write is passed. They must not vanish silently — an operator needs to see what
@@ -453,6 +497,50 @@ class ProbeSkippedWriteTest(unittest.TestCase):
             self.assertIn("skipped 2 write target(s)", proc.stdout,
                           "the skip report must still print even when nothing else is probed")
             self.assertIn("no non-write paths given", proc.stdout)
+
+
+class ProbePublicAuthEnvelopeTest(unittest.TestCase):
+    """A generic login/register/reset-initiation response must answer identically
+    with and without a token by design -- that's not a leak. probe.py used to flag
+    the Shady Oaks Financial /api/forgot-password response as NO-AUTH LEAK.
+    is_expected_public_auth_response() now recognizes the narrow case (a known
+    auth path, a 2xx/3xx status, and a JSON body made only of generic status/message
+    keys) while any extra field -- a reset token, a user object -- still falls
+    through to the leak verdict. Also covers the same live run's --methods output,
+    which printed the server's global Access-Control-Allow-Methods policy as if it
+    were evidence that route-specific handlers exist for every verb."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_probe_treats_generic_reset_as_public_and_labels_cors_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = os.path.join(tmp, "paths.txt")
+            with open(paths, "w", encoding="utf-8") as fh:
+                fh.write("POST /api/forgot-password\n")
+            proc = run_full("probe.py", "--base", self.base_url, "--token", "faketoken",
+                            "--paths", paths, "--methods", "--out", os.path.join(tmp, "out"))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("public-endpoint — expected without auth", proc.stdout)
+            self.assertNotIn("NO-AUTH LEAK", proc.stdout)
+            self.assertIn("CORS policy -> GET,POST,PUT,PATCH,DELETE", proc.stdout)
+            self.assertNotIn("OPTIONS ->", proc.stdout)
+
+    def test_probe_keeps_sensitive_public_auth_fields_on_leak_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = os.path.join(tmp, "paths.txt")
+            with open(paths, "w", encoding="utf-8") as fh:
+                fh.write("POST /api/forgot-password?mode=leak\n")
+            proc = run_full("probe.py", "--base", self.base_url, "--token", "faketoken",
+                            "--paths", paths, "--out", os.path.join(tmp, "out"))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("NO-AUTH LEAK", proc.stdout)
+            self.assertNotIn("public-endpoint — expected without auth", proc.stdout)
 
 
 class JwtquickBaselineRejectionTest(unittest.TestCase):
@@ -540,6 +628,31 @@ class FlaghookSyntheticDetectionTest(unittest.TestCase):
             self.assertTrue(os.path.isfile(log), "flaghook did not create ctf-flags.log")
             with open(log, encoding="utf-8") as fh:
                 self.assertIn(marker, fh.read())
+
+
+class FlaghookHealthMarkerTest(unittest.TestCase):
+    """A synthetic flag proves the script's own regex works, but the Shady Oaks
+    Financial run showed that alone isn't enough: the same session's real
+    PostToolUse hook produced no log entry for either a real flag or a synthetic
+    one, because invoking flaghook.py directly only proves the script -- never
+    whether PostToolUse actually calls it. A dedicated bug{CodexHarnessHookCheck_
+    <nonce>} marker gives an end-to-end activation check: it must land in
+    ~/.claude/ctf-flaghook-ok, a sentinel kept separate from ctf-flags.log so a
+    routine activation check never pollutes the real flag record."""
+
+    def test_flaghook_health_marker_writes_sentinel_not_flag_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = "bug{CodexHarnessHookCheck_regressiontest01}"
+            payload = json.dumps({"tool_name": "Bash", "tool_response": marker})
+            proc = run_full("flaghook.py", input_text=payload, env={"HOME": tmp})
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            sentinel = os.path.join(tmp, ".claude", "ctf-flaghook-ok")
+            self.assertTrue(os.path.isfile(sentinel),
+                            "flaghook did not write the health-check sentinel")
+            with open(sentinel, encoding="utf-8") as fh:
+                self.assertEqual(fh.read().strip(), marker)
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "ctf-flags.log")),
+                             "a health-check marker must never be logged as a real flag")
 
 
 if __name__ == "__main__":

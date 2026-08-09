@@ -26,6 +26,7 @@ Options:
   --delay S     per-request delay (default 0.05)
 """
 import argparse
+import json
 import os
 import random
 import re
@@ -117,6 +118,10 @@ ERROR_HINTS = ("error", "unauthorized", "forbidden", "denied", "required",
 # Express's default 404 embeds the path ("Cannot POST /api/favorites/"), so its
 # length changes with every path and pure size-matching never recognises it.
 EXPRESS_404 = re.compile(r'Cannot (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /', re.I)
+PUBLIC_AUTH_ROUTE = re.compile(
+    r'/(?:api/)?(?:auth/)?(?:login|register|signup|forgot-password|reset-password|'
+    r'password-reset|verify-email)(?:/|$)', re.I)
+PUBLIC_ENVELOPE_KEYS = {"message", "error", "success", "status"}
 
 
 def is_framework_404(r):
@@ -131,6 +136,29 @@ def looks_like_error(r):
         return True
     body = (r.text or "")[:200].lower()
     return any(h in body for h in ERROR_HINTS)
+
+
+def is_expected_public_auth_response(path, r):
+    """Recognize a generic public auth-flow envelope, not an authorization leak.
+
+    Login/register/reset initiation routes must work before authentication. Keep
+    this deliberately narrow: only known auth paths, 2xx/3xx responses, and JSON
+    objects made solely of generic status/message keys qualify. Tokens, user
+    objects, reset links, or any other returned field still fall through to the
+    leak verdict and flag scan.
+    """
+    if isinstance(r, Exception) or r is None or not (200 <= r.status_code < 400):
+        return False
+    if not PUBLIC_AUTH_ROUTE.search(path.split("?", 1)[0]):
+        return False
+    try:
+        data = r.json()
+    except ValueError:
+        return False
+    if not isinstance(data, dict) or not data:
+        return False
+    keys = {str(k).lower() for k in data}
+    return keys <= PUBLIC_ENVELOPE_KEYS
 
 
 def main():
@@ -225,6 +253,11 @@ def main():
                 verdict = "public-error — same response without auth"
             real.append(label)
         elif (not is_fallback(sn) and sa[0] != "ERR"
+              and (rn.text or "") == (ra.text or "") and sn[1] > 0
+              and is_expected_public_auth_response(p, rn)):
+            verdict = "public-endpoint — expected without auth"
+            real.append(label)
+        elif (not is_fallback(sn) and sa[0] != "ERR"
               and (rn.text or "") == (ra.text or "") and sn[1] > 0):
             # identical *content*, not merely identical length — two same-length
             # error bodies ("Admin access required" vs "Access token required")
@@ -262,9 +295,12 @@ def main():
         if a.methods and not is_fallback(sa if ra is not None else sn):
             try:
                 o = sess.options(url, headers=auth, timeout=15, verify=False)
-                allow = o.headers.get("allow") or o.headers.get("access-control-allow-methods")
+                allow = o.headers.get("allow")
+                cors_methods = o.headers.get("access-control-allow-methods")
                 if allow:
-                    print("%-40s OPTIONS -> %s" % ("", allow))
+                    print("%-40s Allow -> %s" % ("", allow))
+                if cors_methods:
+                    print("%-40s CORS policy -> %s" % ("", cors_methods))
             except Exception:
                 pass
 

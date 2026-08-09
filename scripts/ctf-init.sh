@@ -114,7 +114,10 @@ echo ""
 ) &
 JOB_META=$!
 
-# ── Job 2: admin / API quick paths — SPA-fallback-aware ──────────────────────
+# ── Job 2: admin / protected API leaves — SPA-fallback-aware ─────────────────
+# Direct nested guesses matter: a fallback/404 at /api prevents recursive
+# fuzzers from ever reaching a protected leaf whose unauthenticated 401/403 is
+# the only existence oracle.
 (
   echo "[job:quickcheck] starting"
   python3 "$SCRIPT_DIR/quickrecon.py" --base "$TARGET" --out "$RECON/quickcheck_probe" \
@@ -123,6 +126,10 @@ JOB_META=$!
     swagger swagger-ui swagger.json api-docs openapi.json \
     console debug phpinfo.php .git/HEAD .env admin/login \
     api/admin dashboard panel management \
+    api/me api/profile api/users api/search api/stocks api/stocks/search \
+    api/items/search api/account api/account/reset api/account/verify \
+    api/account/recover api/review-requests api/reset-password \
+    api/password-reset api/flag api/admin/flag api/admin/stats api/admin/users \
     > "$RECON/quickcheck_probe.log" 2>&1
   echo "[job:quickcheck] done"
 ) &

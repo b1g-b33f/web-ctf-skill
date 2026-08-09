@@ -107,7 +107,11 @@ for f in sorted(listed - have_paths):
 
 # 7. no real flags, tokens or lab hostnames in tracked content -----------------
 FLAG = re.compile(r'(?:HTB|bug|flag|CTF|THM|picoCTF)\{([^}]{3,90})\}', re.I)
-PLACEHOLDER = re.compile(r'^[.…]{0,3}$|^\s*$|^<|^\$|^[A-Z_]+$')
+# The trailing `_<...>` alternative covers documented sentinel/marker literals like
+# flaghook.py's health-check pattern bug{CodexHarnessHookCheck_<nonce>}: a literal,
+# human-readable prefix ending in an angle-bracketed placeholder name. A real flag
+# never ends in that shape, so this can't hide an actual leaked flag.
+PLACEHOLDER = re.compile(r'^[.…]{0,3}$|^\s*$|^<|^\$|^[A-Z_]+$|.*_<[^{}]*>$')
 for d in docs:
     body = read(d)
     for inner in FLAG.findall(body):
