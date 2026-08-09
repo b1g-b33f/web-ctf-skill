@@ -86,11 +86,13 @@ else:
 
 # 6. porting table vs files that actually carry host paths ---------------------
 # Windows roots kept for regression safety even though the current baseline is
-# macOS; ~/Tools and ~/Obsidian (or $HOME-spelled) are this baseline's equivalent
-# of a hardcoded host path and need repointing on a machine with a different layout.
+# macOS; ~/Offsec/Web_CTF, /opt/security-tools, and ~/Obsidian (or $HOME-spelled)
+# are this baseline's equivalent of a hardcoded host path and need repointing on
+# a machine with a different layout.
 HOSTPATH = re.compile(
     r'(?:C:\\|C:/|/c/)(?!Program Files/Git)[A-Za-z0-9_]'
-    r'|(?:~|\$HOME)/(?:Tools|Obsidian)/[A-Za-z]')
+    r'|(?:~|\$HOME)/(?:Offsec/Web_CTF|Obsidian)/[A-Za-z]'
+    r'|/opt/security-tools/[A-Za-z]')
 have_paths = {d for d in docs if d != "README.md" and HOSTPATH.search(read(d))}
 
 porting = readme.split("## Porting")[-1] if "## Porting" in readme else ""
@@ -154,10 +156,12 @@ for p in [p for p in paths if p.endswith(".sh")]:
 for p in paths:
     body = read(p)
     for m in set(re.findall(
-            r'(?<![:${])(?:/c/Tools|C:/Tools|C:\\Tools|/Users/[^/\s]+/Tools|/home/[^/\s]+/Tools)/[A-Za-z]\S*',
+            r'(?<![:${])(?:/c/Tools|C:/Tools|C:\\Tools|/Users/[^/\s]+/Offsec/Web_CTF'
+            r'|/home/[^/\s]+/Offsec/Web_CTF|/opt/security-tools)/[A-Za-z]\S*',
             body)):
-        if ":-" in body[max(0, body.find(m) - 30):body.find(m)]:
-            continue                    # ${VAR:-/c/Tools/...} default, fine
+        context = body[max(0, body.find(m) - 60):body.find(m)]
+        if ":-" in context or "environ.get(" in context:
+            continue                    # ${VAR:-...} or os.environ.get(VAR, ...) default, fine
         warn("%s hardcodes %s - prefer an env override with that as the default" % (p, m))
 
 quiet = "--quiet" in sys.argv

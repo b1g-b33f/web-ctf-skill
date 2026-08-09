@@ -15,7 +15,7 @@ Arguments: `$ARGUMENTS` → `/web-ctf [platform] <target> [challenge-name] [user
   `bugforge` → `bug{}`, `picoctf` → `picoCTF{}`, otherwise `flag{}` — and whatever the brief
   states beats all of these. Unknown or omitted is fine; match on `\w+\{.*\}` and move on.
 - `target` — URL, IP, or IP:port (prepend `http://` if missing)
-- `challenge-name` — sanitize to lowercase-hyphens; workspace is `~/Tools/CTF/<challenge-name>/`
+- `challenge-name` — sanitize to lowercase-hyphens; workspace is `~/Offsec/Web_CTF/CTF/<challenge-name>/`
 
 If args are missing, infer from the conversation. Don't stop to ask for a challenge name — derive one from the hostname.
 
@@ -41,7 +41,7 @@ Two rules that repeatedly decide solves:
 
 ## Order of operations
 
-1. **Source review** — if the challenge ships source (a download, a repo, `~/Tools/Source Code/<name>/`), read it first; it replaces most guesswork → `references/source-review.md`
+1. **Source review** — if the challenge ships source (a download, a repo, `~/Offsec/Web_CTF/Source Code/<name>/`), read it first; it replaces most guesswork → `references/source-review.md`
 2. **Launch recon in a retained execution session** — let the tool yield while it runs; do not
    detach it with `nohup ... &` → `references/web-recon.md`. `ctf-init.sh`
    mines JS and calibrates the SPA-fallback signature *before* backgrounding anything else, so
@@ -165,7 +165,7 @@ python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <ta
 # mine bundles and rendered HTML: routes (incl. query strings + .concat), form methods,
 # comments, and narrative hint text (flavor-text sentences revealing the bug, e.g. a
 # success-screen message that spells out a weak secret in plain English)
-python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Tools/CTF/<name>/recon/
+python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<name>/recon/
 
 # ctf-init.sh already ran this pre-auth; re-run authenticated, apps sometimes
 # bootstrap different data post-login — writes recon/jsmine.txt + methods.txt, and
@@ -196,7 +196,7 @@ python3 ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TO
 # OOB collector + public tunnel in one command. Run it (run_in_background) the moment a lab
 # mentions an admin/operator/reviewer opening your submission — BEFORE the first payload.
 python3 ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge-name>   # prints OOB_URL=
-grep -a 'HIT\|FLAG' ~/Tools/CTF/<challenge-name>/oob.log
+grep -a 'HIT\|FLAG' ~/Offsec/Web_CTF/CTF/<challenge-name>/oob.log
 ```
 
 `probe.py` verdicts: `not-a-route` (calibrated fallback body, per method, or a framework 404),
@@ -212,16 +212,16 @@ cross-origin verb policy and does not prove that handlers exist for those verbs.
 
 **Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
 
-A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Tools/.claude/settings.json` — placement rules are in CLAUDE.md) scans command results for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
+A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Offsec/Web_CTF/.claude/settings.json` — placement rules are in CLAUDE.md) scans command results for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
 
 **Verify hook activation end-to-end after every app restart or tool-surface change.** In one tool call, print a unique `bug{CodexHarnessHookCheck_<nonce>}` marker; in the next tool call, verify that exact marker landed in `~/.claude/ctf-flaghook-ok`. The hook treats this marker as a health check, not a real flag, so it never touches `ctf-flags.log`. Invoking `flaghook.py` directly proves only the script is correct, not that `PostToolUse` actually fires — a stale or untrusted hook config fails silently. If the sentinel is absent, record `flag hook inactive` in `WORKLOG.md` and keep scanning every response manually.
 
 ## Environment
 
-Paths, tool invocations, and wordlists are in `~/Tools/CLAUDE.md` — that's already in context; don't re-derive it. Exploit scripts go in `~/Tools/Python/<challenge-name>/`. Recon output goes in `~/Tools/CTF/<challenge-name>/recon/`.
+Paths, tool invocations, and wordlists are in `~/Offsec/Web_CTF/CLAUDE.md` — that's already in context; don't re-derive it. Exploit scripts go in `~/Offsec/Web_CTF/Python/<challenge-name>/`. Recon output goes in `~/Offsec/Web_CTF/CTF/<challenge-name>/recon/`.
 
 CLAUDE.md's shell gotchas (`cd` not persisting, no bare `python`) bite hardest here.
 For `cd`: a `$TOKEN` set in one Bash call is gone in the next unless it's written to a
-file — `echo "$TOKEN" > ~/Tools/CTF/<name>/token.txt`, then `T=$(cat ...)` per call.
+file — `echo "$TOKEN" > ~/Offsec/Web_CTF/CTF/<name>/token.txt`, then `T=$(cat ...)` per call.
 For `python`: every invocation in this skill, its references, and its scripts uses
 `python3` — translate any pasted one-liner that says bare `python` before running it.

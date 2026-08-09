@@ -23,8 +23,8 @@ fi
 NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
 
 # Overridable so this works off any machine's layout without editing the script.
-CTF_ROOT="${CTF_ROOT:-$HOME/Tools/CTF}"
-SECLISTS="${SECLISTS:-$HOME/Tools/SecLists}"
+CTF_ROOT="${CTF_ROOT:-$HOME/Offsec/Web_CTF/CTF}"
+SECLISTS="${SECLISTS:-/opt/security-tools/SecLists}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 WORKDIR="$CTF_ROOT/$NAME"

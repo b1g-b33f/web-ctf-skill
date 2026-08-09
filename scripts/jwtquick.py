@@ -19,12 +19,12 @@ sometimes a ~40s one instead of ~1s.
 --wordlist pins a single list and skips the chain entirely, for when you already know
 which one you want:
 
-    python3 jwtquick.py --token "$T" --base URL --test /admin --wordlist ~/Tools/SecLists/Passwords/Leaked-Databases/rockyou.txt
+    python3 jwtquick.py --token "$T" --base URL --test /admin --wordlist /opt/security-tools/SecLists/Passwords/Leaked-Databases/rockyou.txt
 """
 import argparse, base64, hashlib, hmac, json, os, re, sys, time
 
 FLAG = re.compile(r"\w+\{[^}\n]{4,}\}")
-SECLISTS = os.environ.get("SECLISTS", os.path.expanduser("~/Tools/SecLists"))
+SECLISTS = os.environ.get("SECLISTS", "/opt/security-tools/SecLists")
 DEFAULT_WL = SECLISTS.rstrip("/") + "/Passwords/scraped-JWT-secrets.txt"
 ROCKYOU = os.environ.get("ROCKYOU", SECLISTS.rstrip("/") + "/Passwords/Leaked-Databases/rockyou.txt")
 # claims worth flipping, and what to flip them to

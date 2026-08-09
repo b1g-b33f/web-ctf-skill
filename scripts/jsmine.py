@@ -3,7 +3,7 @@
 
 Usage:
   python3 jsmine.py <dir-or-file> [more...]
-  python3 jsmine.py ~/Tools/CTF/<name>/recon/
+  python3 jsmine.py ~/Offsec/Web_CTF/CTF/<name>/recon/
 
 Catches the things hand-rolled regexes miss: query-string routes, template-literal
 and .concat() route building, and the client router table.

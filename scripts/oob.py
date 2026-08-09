@@ -26,7 +26,7 @@ failure mode, so prefer it and keep `--tunnel ngrok` as the fallback.
 import argparse, base64, os, re, subprocess, sys, threading, datetime, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-CTF_ROOT = os.environ.get("CTF_ROOT", os.path.expanduser("~/Tools/CTF"))
+CTF_ROOT = os.environ.get("CTF_ROOT", os.path.expanduser("~/Offsec/Web_CTF/CTF"))
 CF = os.environ.get("CLOUDFLARED", "cloudflared")
 NGROK = os.environ.get("NGROK", "ngrok")
 FLAG = re.compile(r"(?:HTB|bug|flag|CTF)\{[^}]{4,120}\}", re.I)

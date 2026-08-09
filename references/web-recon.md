@@ -84,7 +84,7 @@ To mine a directory of bundles you already have on disk directly — it already 
 query-string routes, `.concat()` route building, minified axios aliases, and the router table:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Tools/CTF/<challenge-name>/recon/
+python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<challenge-name>/recon/
 ```
 
 The inline version below is the fallback if the script is unavailable:
@@ -93,7 +93,7 @@ The inline version below is the fallback if the script is unavailable:
 python3 -c "
 import re, glob
 all_content = ''
-for f in glob.glob('~/Tools/CTF/<challenge-name>/recon/*.js'):
+for f in glob.glob('~/Offsec/Web_CTF/CTF/<challenge-name>/recon/*.js'):
     with open(f, encoding='utf-8', errors='replace') as fh: all_content += fh.read() + '\n'
 
 # API endpoints — note the trailing char class INCLUDES ? so query-string routes aren't missed
@@ -165,7 +165,7 @@ Record per response: status, content-type, **all** body fields (especially ones 
 
 Then:
 ```bash
-grep -rE 'HTB\{|bug\{|flag\{' ~/Tools/CTF/<challenge-name>/recon/ 2>/dev/null
+grep -rE 'HTB\{|bug\{|flag\{' ~/Offsec/Web_CTF/CTF/<challenge-name>/recon/ 2>/dev/null
 ```
 
 ## 4. Fuzzing (only after exploitation is exhausted)
@@ -173,7 +173,7 @@ grep -rE 'HTB\{|bug\{|flag\{' ~/Tools/CTF/<challenge-name>/recon/ 2>/dev/null
 `ctf-init.sh` already ran ferox/nuclei — check `recon/ferox.txt` and `recon/nuclei.txt` for unexplored hits before re-scanning.
 
 ```bash
-feroxbuster -u <target>/<subpath> -w ~/Tools/SecLists/Discovery/Web-Content/raft-large-directories.txt \
+feroxbuster -u <target>/<subpath> -w /opt/security-tools/SecLists/Discovery/Web-Content/raft-large-directories.txt \
   --depth 2 -t 20 --timeout 5 -q 2>&1 | head -100
 
 python3 -m arjun -u <target>/api/<endpoint> -m GET -q 2>&1 | head -40
