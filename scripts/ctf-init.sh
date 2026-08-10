@@ -189,6 +189,14 @@ METHOD_COUNT=$(line_count "$RECON/methods.txt")
 ROUTE_COUNT=$(sed -n 's/^=== ROUTES (\([0-9][0-9]*\)) ===$/\1/p' "$RECON/jsmine.txt" 2>/dev/null | head -1)
 ROUTE_COUNT="${ROUTE_COUNT:-0}"
 echo "[*] JS harvest done — $METHOD_COUNT METHOD -> PATH entries ($RECON/methods.txt, $RECON/jsmine.txt)"
+awk 'toupper($1) == "POST" && tolower($2) ~ "(^|/)graphql($|[?/])" { print $2 }' \
+  "$RECON/methods.txt" 2>/dev/null | sort -u > "$RECON/graphql-endpoints.txt"
+GRAPHQL_PATH=$(head -1 "$RECON/graphql-endpoints.txt" 2>/dev/null)
+if [[ -n "$GRAPHQL_PATH" ]]; then
+  echo "[!] GraphQL route mapped: $GRAPHQL_PATH"
+  echo "[!] After auth, run graphqlquick.py in parallel with jwtquick.py:"
+  echo "    python3 $SCRIPT_DIR/graphqlquick.py --url $TARGET$GRAPHQL_PATH --token \"\$TOKEN\" --id \"\$YOUR_ID\" --out $RECON/graphqlquick"
+fi
 if [[ "$ROUTE_COUNT" -gt 0 && "$METHOD_COUNT" -eq 0 ]]; then
   echo "[!] HIGH PRIORITY: $ROUTE_COUNT route(s) found but zero HTTP methods mapped"
   echo "[!] POST-only endpoints remain unknown; quickcheck will run method fallback discovery"
@@ -285,6 +293,14 @@ cat "$RECON/headers.txt" 2>/dev/null | grep -E "^(HTTP|Server|X-Powered|Set-Cook
 echo ""
 echo "── JS harvest — METHOD -> PATH (recon/methods.txt) ─────"
 cat "$RECON/methods.txt" 2>/dev/null || echo "  none"
+
+if [[ -s "$RECON/graphql-endpoints.txt" ]]; then
+  echo ""
+  echo "── GraphQL post-auth fast track ─────────"
+  while IFS= read -r path; do
+    echo "python3 $SCRIPT_DIR/graphqlquick.py --url $TARGET$path --token \"\$TOKEN\" --id \"\$YOUR_ID\" --out $RECON/graphqlquick"
+  done < "$RECON/graphql-endpoints.txt"
+fi
 
 echo ""
 echo "── Meta file hits — status size content-type URL (SPA fallback suppressed) ──"

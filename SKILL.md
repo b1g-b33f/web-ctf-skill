@@ -54,11 +54,15 @@ Two rules that repeatedly decide solves:
    re-provisioned with a new flag and host but the same bug (BugForge especially) — a prior
    writeup is the method, free. **Read the hit count first:** *one* note = the same challenge
    re-provisioned, method transfers. *Several* = an app **family**, and only the endpoint map
-   and already-hardened list transfer, never the bug. One `find`, then move on
+   and already-hardened list transfer, never the bug. If a live signal later fires, narrow those
+   family filenames by that signal (for example, app stem + `graphql`) and open at most one exact
+   match as a hypothesis. One initial `find`, then move on
    → `references/vault-index.md`
 3. **Get an account** — login with given creds, else open registration → `references/auth-jwt.md`
    **Hold a JWT? Run `jwtquick.py` foreground — ~1s, not a background job.** Crack + alg:none
    + forge + fire at a refusing route, one call. Never defer it → `references/auth-jwt.md` §2
+   If recon already mapped GraphQL, run `graphqlquick.py` in the same authenticated parallel burst;
+   it is read-only, bounded, and stops on a flag, throttling, or gateway failure → `references/graphql.md`
 4. **Read the seeded corpus — first authenticated action, before any probing.** If the app stores
    documents/files/notes/tickets, dump them all now, in the same parallel burst as steps 5–6;
    labs plant the brief in one of them (Vaultly-010 named its own vulnerable endpoint there).
@@ -163,8 +167,14 @@ Use these instead of retyping one-liners — they encode fixes for mistakes that
 python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
 # mine bundles/rendered HTML: direct calls, fetch(url,{method}), discovered request
-# wrappers, forms, provenance, ranked action routes, comments, and narrative hints
+# wrappers, forms, provenance, full GraphQL operations/identity signals, ranked action routes,
+# comments, and narrative hints
 python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<name>/recon/
+
+# bounded read-only GraphQL fast track: anonymous/auth reachability, introspection, then
+# validation-error schema oracle + high-value Query fields when introspection is disabled
+python3 ~/.claude/skills/web-ctf/scripts/graphqlquick.py \
+  --url <target>/api/graphql --token "$TOKEN" --id "$YOUR_ID" --out recon/graphqlquick
 
 # ctf-init.sh already ran this pre-auth; re-run authenticated, apps sometimes
 # bootstrap different data post-login — writes recon/jsmine.txt + methods.txt, and

@@ -267,6 +267,124 @@ def extract_method_lines(js, wrapper_names):
     return call_lines + template_lines + concat_lines + forms + generic_request_lines(js, wrapper_names)
 
 
+GRAPHQL_START = re.compile(
+    r'\b(query|mutation|subscription)\s+([A-Za-z_]\w*)\s*(\([^{}]{0,1000}\))?\s*\{')
+
+
+def graphql_comment_end(text, index):
+    """Index just past a GraphQL ``#`` comment that starts at ``index``.
+
+    A comment runs to end of line, but the line may end either with a real
+    newline (source maps, unminified bundles) or with the two characters
+    ``\\n`` that a minified JS string literal uses instead.
+    """
+    for cursor in range(index, len(text)):
+        char = text[cursor]
+        if char in "\r\n":
+            return cursor
+        if char == "\\" and text[cursor + 1:cursor + 2] in ("n", "r"):
+            return cursor
+    return len(text)
+
+
+def scan_graphql(text, start, limit=None):
+    """Yield ``(index, char)`` over a GraphQL document, skipping strings/comments.
+
+    Inside a GraphQL document only ``"`` opens a string — an apostrophe is
+    ordinary prose, so treating it as a JS quote used to swallow the rest of the
+    operation. ``#`` comments are skipped outright, since a brace mentioned in a
+    comment is not structure.
+    """
+    stop = len(text) if limit is None else min(len(text), limit)
+    index = start
+    while index < stop:
+        char = text[index]
+        if char == "#":
+            index = graphql_comment_end(text, index)
+            continue
+        if char == '"':
+            index += 1
+            while index < stop:
+                if text[index] == "\\":
+                    index += 2
+                    continue
+                if text[index] == '"':
+                    break
+                index += 1
+            index += 1
+            continue
+        yield index, char
+        index += 1
+
+
+def strip_graphql_comments(text):
+    return "".join(char for _, char in scan_graphql(text, 0))
+
+
+def extract_graphql_operations(js):
+    """Extract complete named GraphQL operations with balanced selection braces.
+
+    The old one-line regex stopped at the opening brace, hiding the root resolver,
+    selection fields, and identity-shaped variables that make an IDOR lead valuable.
+    Keep this parser intentionally GraphQL-shaped rather than trying to parse all JS:
+    start at a named operation, then balance braces while skipping GraphQL strings
+    and ``#`` comments.
+    """
+    operations = []
+    for match in GRAPHQL_START.finditer(js):
+        brace = js.find("{", match.start(), match.end())
+        depth = 0
+        end = None
+        for index, char in scan_graphql(js, brace, brace + 20000):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        if end is None:
+            continue
+        raw = js[match.start():end]
+        # A minified JS string carries GraphQL newlines as the two characters
+        # ``\\n``, while sourcesContent carries real newlines. Normalize both so
+        # the bundle and its source map collapse to one operation/provenance row.
+        semantic = re.sub(r'\\[nrt]', ' ', raw)
+        normalized = " ".join(semantic.split())
+        # Comments are kept in the emitted operation (they carry lab hints) but
+        # never drive parsing: a leading comment would otherwise hide the root.
+        analysed = re.sub(r'\\[nrt]', ' ', strip_graphql_comments(raw))
+        header = analysed[:analysed.find("{")]
+        variables = list(dict.fromkeys(re.findall(r'\$([A-Za-z_]\w*)', header)))
+        identity_variables = [name for name in variables if name.lower().endswith("id")]
+        body = analysed[analysed.find("{") + 1:]
+        root_match = re.match(
+            r'\s*(?:[A-Za-z_]\w*\s*:\s*)?([A-Za-z_]\w*)', body)
+        roots = [root_match.group(1)] if root_match else []
+        operations.append({
+            "type": match.group(1),
+            "name": match.group(2),
+            "variables": variables,
+            "identity_variables": identity_variables,
+            "roots": roots,
+            "operation": normalized,
+        })
+    return operations
+
+
+def format_graphql_operation(operation, sources=None):
+    bits = ["%s %s" % (operation["type"], operation["name"])]
+    if operation["variables"]:
+        bits.append("vars=" + ",".join(operation["variables"]))
+    if operation["identity_variables"]:
+        bits.append("identity-vars=" + ",".join(operation["identity_variables"]))
+    if operation["roots"]:
+        bits.append("roots=" + ",".join(operation["roots"]))
+    if sources:
+        bits.append("sources=" + ",".join(sorted(sources)))
+    return " ".join(bits) + " :: " + operation["operation"]
+
+
 def load(args):
     blobs = []
     for a in args:
@@ -291,11 +409,11 @@ def load(args):
     return blobs
 
 
-def section(title, items, limit=400):
+def section(title, items, limit=400, width=200):
     items = sorted(set(i for i in items if i))
     print("\n=== %s (%d) ===" % (title, len(items)))
     for i in items[:limit]:
-        print("  " + str(i)[:200])
+        print("  " + str(i)[:width])
 
 
 def main():
@@ -402,7 +520,19 @@ def main():
     section("COMMENTS", comments, limit=120)
 
     # ---- graphql ------------------------------------------------------------
-    section("GRAPHQL", re.findall(r'(?:query|mutation|subscription)\s+\w+[^{]{0,80}\{', all_js))
+    graphql_operations = {}
+    graphql_sources = {}
+    for filename, blob in blobs:
+        label = source_label(filename).replace("\\", "/")
+        for operation in extract_graphql_operations(blob):
+            key = (operation["type"], operation["name"], operation["operation"])
+            graphql_operations[key] = operation
+            graphql_sources.setdefault(key, set()).add(label)
+    graphql_lines = [format_graphql_operation(operation, graphql_sources[key])
+                     for key, operation in graphql_operations.items()]
+    section("GRAPHQL OPERATIONS", graphql_lines, width=600)
+    identity_lines = [line for line in graphql_lines if "identity-vars=" in line]
+    section("GRAPHQL IDENTITY SIGNALS", identity_lines, width=600)
 
     # ---- role / flag / feature strings -------------------------------------
     section("ROLE & FEATURE STRINGS", re.findall(

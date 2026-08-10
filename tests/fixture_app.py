@@ -24,6 +24,9 @@ Routes:
   GET  /api/stocks/search -> 401, JSON error body — a protected leaf nested below
                               /api, reachable only by direct guess since /api itself
                               is the SPA fallback
+  POST /api/graphql       -> authenticated GraphQL endpoint with introspection disabled;
+                              validation errors disclose user(id: ID!), whose password
+                              field carries a synthetic regression flag
   OPTIONS *                -> 204 with Access-Control-Allow-Methods set and no
                               route-specific Allow header, so probe.py's --methods
                               output must read "CORS policy", never "Allow"
@@ -44,7 +47,19 @@ SPA_HTML = (b'<html><body>SPA shell<a href="/login">login</a>'
             b'<script src="/missing.js"></script><script src="/json.js"></script></body></html>')
 LOGIN_HTML = (b'<html><body><form action="/api/auth/login" method="post">'
               b'<input name="email"></form></body></html>')
-APP_JS = b'a.get("/api/data?limit=10");\na.post("/api/submit", {});\n'
+APP_JS = b'''a.get("/api/data?limit=10");
+a.post("/api/submit", {});
+const LOG_ACTIVITY_MUTATION = `
+  mutation LogActivity($event: String!, $userId: ID, $metadata: String) {
+    logActivity(event: $event, userId: $userId, metadata: $metadata) {
+      id
+      event
+      timestamp
+    }
+  }
+`;
+a.post("/api/graphql", {query: LOG_ACTIVITY_MUTATION});
+'''
 DATA_401 = b'{"error":"unauthorized"}'
 OBJECT_404 = b'{"error":"not found"}'
 FORGOT_PASSWORD_PUBLIC = b'{"message":"If that email exists, a reset link was sent."}'
@@ -52,6 +67,7 @@ FORGOT_PASSWORD_LEAK = (b'{"message":"If that email exists, a reset link was sen
                         b'"reset_token":"leaked-secret-value"}')
 STOCKS_SEARCH_401 = b'{"error":"access token required"}'
 CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE"
+GRAPHQL_FLAG = "bug" + "{GraphqlQuickRegression123}"
 
 MAPPED_JS = b'// mapped bundle, no routes of its own\n//# sourceMappingURL=/mapped.js.map\n'
 VENDOR_SRC = "// vendor filler — must be excluded from the extracted src/ tree"
@@ -138,6 +154,48 @@ class Handler(BaseHTTPRequestHandler):
             return 200, "application/json", FORGOT_PASSWORD_PUBLIC
         if path == "/api/stocks/search":
             return 401, "application/json", STOCKS_SEARCH_401
+        if path == "/api/graphql" and self.command == "POST":
+            if not self.headers.get("Authorization"):
+                return 401, "application/json", b'{"error":"access token required"}'
+            query = data.get("query", "") if isinstance(data, dict) else ""
+            if "__typename" in query:
+                return 200, "application/json", b'{"data":{"__typename":"Query"}}'
+            if "__schema" in query:
+                body = _json.dumps({"errors": [{
+                    "message": "GraphQL introspection has been disabled"
+                }]}).encode()
+                return 200, "application/json", body
+            if re.search(r'\{\s*user\s*\}', query):
+                body = _json.dumps({"errors": [
+                    {"message": 'Field "user" argument "id" of type "ID!" is required.'},
+                    {"message": 'Field "user" of type "User" must have a selection of subfields.'},
+                ]}).encode()
+                return 200, "application/json", body
+            user_query = re.search(
+                r'user\s*\(\s*id\s*:\s*["\']?(\d+)["\']?\s*\)\s*\{\s*([A-Za-z_]\w*)\s*\}',
+                query)
+            if user_query:
+                user_id, field = user_query.groups()
+                values = {
+                    "id": user_id,
+                    "username": "admin" if user_id == "1" else "fixture-user",
+                    "email": "admin@example.test" if user_id == "1" else "user@example.test",
+                    "role": "admin" if user_id == "1" else "user",
+                    "password": GRAPHQL_FLAG if user_id == "1" else "not-a-flag",
+                }
+                if field in values:
+                    body = _json.dumps({"data": {"user": {field: values[field]}}}).encode()
+                else:
+                    body = _json.dumps({"errors": [{
+                        "message": 'Cannot query field "%s" on type "User".' % field
+                    }]}).encode()
+                return 200, "application/json", body
+            root = re.search(r'\{\s*([A-Za-z_]\w*)', query)
+            name = root.group(1) if root else "unknown"
+            body = _json.dumps({"errors": [{
+                "message": 'Cannot query field "%s" on type "Query".' % name
+            }]}).encode()
+            return 200, "application/json", body
         if path == "/api/account/recover" and self.command == "POST":
             data = data if isinstance(data, dict) else {}
             matches = [doc for doc in NOSQL_DOCS

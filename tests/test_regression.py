@@ -158,6 +158,7 @@ class RegressionTest(unittest.TestCase):
 
             self.assertRegex(methods, r'GET\s+/api/data\?limit=10')
             self.assertRegex(methods, r'POST\s+/api/submit')
+            self.assertRegex(methods, r'POST\s+/api/graphql')
 
             jsmine_path = os.path.join(tmp, "jsmine.txt")
             self.assertTrue(os.path.isfile(jsmine_path), "jsmine.txt was not written:\n" + out)
@@ -277,6 +278,11 @@ class RegressionTest(unittest.TestCase):
             with open(os.path.join(workdir, "recon", "methods.txt"), encoding="utf-8") as fh:
                 methods = fh.read()
             self.assertRegex(methods, r'POST\s+/api/auth/login', out)
+            graphql_endpoints = os.path.join(workdir, "recon", "graphql-endpoints.txt")
+            with open(graphql_endpoints, encoding="utf-8") as fh:
+                self.assertEqual(fh.read().strip(), "/api/graphql")
+            self.assertIn("GraphQL route mapped: /api/graphql", out)
+            self.assertIn("graphqlquick.py --url", out)
 
     def test_ctf_init_captures_ferox_progress_in_ferox_log(self):
         """feroxbuster's own -q/--silent flags still leave a startup banner and
@@ -731,6 +737,114 @@ fetch('/api/account/recover', {
             self.assertIn("=== ROUTES (1) ===", out)
             self.assertIn("=== METHOD -> PATH (0) ===", out)
             self.assertIn("HIGH PRIORITY", out)
+
+
+class GraphqlOperationMiningTest(unittest.TestCase):
+    def test_full_operation_identity_signal_and_provenance_are_preserved(self):
+        bundle = r'''
+const LOG_ACTIVITY_MUTATION = `
+  mutation LogActivity($event: String!, $userId: ID, $metadata: String) {
+    logActivity(event: $event, userId: $userId, metadata: $metadata) {
+      id
+      event
+      timestamp
+    }
+  }
+`;
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "activity.js")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(bundle)
+            proc = run_full("jsmine.py", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("=== GRAPHQL OPERATIONS (1) ===", proc.stdout)
+            self.assertIn("mutation LogActivity", proc.stdout)
+            self.assertIn("vars=event,userId,metadata", proc.stdout)
+            self.assertIn("identity-vars=userId", proc.stdout)
+            self.assertIn("roots=logActivity", proc.stdout)
+            self.assertIn("sources=activity.js", proc.stdout)
+            self.assertIn("logActivity(event: $event, userId: $userId", proc.stdout)
+            self.assertIn("=== GRAPHQL IDENTITY SIGNALS (1) ===", proc.stdout)
+
+    def test_hash_comments_never_drop_an_operation_or_hide_its_root(self):
+        """A ``#`` comment is prose, not structure.
+
+        Applying JS string rules inside a GraphQL document silently lost work:
+        an apostrophe opened a quote that never closed, so the whole operation
+        vanished, and a leading comment hid the root resolver — the one field
+        that feeds graphqlquick.py's --root. Braces named in a comment are not
+        selection braces, in real-newline and minified ``\\n`` bundles alike.
+        """
+        bundle = r'''
+const APOSTROPHE = `
+  query FirstOp($aId: ID!) {
+    # it's the first, and returns { id
+    account(id: $aId) { balance }
+  }
+`;
+const AFTER = `query SecondOp($bId: ID!) { later(id: $bId) { secret } }`;
+var MINIFIED = "query Minified($zId: ID!) {\n  # it's minified { here\n  zed(id: $zId) {\n    token\n  }\n}";
+const STRING_ARG = `query StringArg($q: String!) { search(filter: "{\"role\":\"admin\"}", term: $q) { id } }`;
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "comments.js"), "w", encoding="utf-8") as fh:
+                fh.write(bundle)
+            proc = run_full("jsmine.py", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("=== GRAPHQL OPERATIONS (4) ===", proc.stdout)
+            for name, root in (("FirstOp", "account"), ("SecondOp", "later"),
+                               ("Minified", "zed"), ("StringArg", "search")):
+                self.assertIn("query %s" % name, proc.stdout)
+                self.assertIn("roots=%s" % root, proc.stdout)
+            # A quoted brace is still structure-free, and the comment text
+            # survives in the emitted operation because it can carry a hint.
+            self.assertIn('filter: "{\\"role\\":\\"admin\\"}"', proc.stdout)
+            self.assertIn("# it's the first", proc.stdout)
+
+
+class GraphqlquickRegressionTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_disabled_introspection_schema_oracle_finds_sensitive_field_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "graphqlquick.py", "--url", self.base_url + "/api/graphql",
+                "--token", "low-priv-token", "--id", "4", "--delay", "0",
+                "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            marker = "bug" + "{GraphqlQuickRegression123}"
+            self.assertIn("introspection unavailable", proc.stdout)
+            self.assertIn("FLAG " + marker, proc.stdout)
+            log = os.path.join(tmp, "probes.jsonl")
+            self.assertTrue(os.path.isfile(log))
+            with open(log, encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertLessEqual(len(records), 48)
+            self.assertTrue(any(not record["authenticated"] for record in records),
+                            "anonymous reachability was not compared")
+            self.assertTrue(all("mutation" not in record["query"].lower()
+                                for record in records),
+                            "generic GraphQL fast track must remain read-only")
+            self.assertTrue(any("user(id: 1) { password }" in record["query"]
+                                for record in records))
+
+    def test_probe_budget_is_a_clean_bounded_stop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "graphqlquick.py", "--url", self.base_url + "/api/graphql",
+                "--token", "low-priv-token", "--id", "4", "--delay", "0",
+                "--max-probes", "3", "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("BOUNDED STOP", proc.stderr)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                self.assertEqual(sum(1 for line in fh if line.strip()), 3)
 
 
 class NosqlquickRegressionTest(unittest.TestCase):

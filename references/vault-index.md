@@ -66,6 +66,19 @@ In family mode the prior notes are still worth the one `find`, but for different
 - Prior bug classes for the family are mild **negative** evidence — this instance is a variant
   the vault doesn't have yet, so it is likelier to be a class the notes *don't* cover.
 
+Once the live app produces a specific signal, narrow the already-found family by **both** app
+stem and signal before opening anything. This is still observation-driven and costs one filename
+query, not a vault crawl:
+
+```bash
+find "${NOTES_VAULT:-$HOME/Obsidian/Pentesting notes/02-AppSec}" -type f \
+  -iname '*sokudo*.md' -iname '*graphql*.md'
+```
+
+Open at most one exact signal match and treat its request as a hypothesis to validate live. If
+there is no exact filename match, stop; do not content-search the whole family or let prior bugs
+choose the target.
+
 Practical consequence: in family mode, run the cheap class-independent checks (JWT crack,
 no-auth probe of every route) **in parallel with** the app-specific hypothesis, never after it.
 

@@ -52,7 +52,8 @@ browser and exfiltrate to a listener you control.
 | Script | Purpose |
 |---|---|
 | `jwtquick.py` | The whole cheap JWT surface in one ~1s foreground call: decode, dictionary-crack the HS256 secret (104k JWT-specific secrets, 0.8s worst case), mint `alg:none` ×4 plus privilege-escalated and id-swapped forgeries, fire them all at a route that refuses you, scan status/headers/body for a flag. Emits a re-sign-only control so a win is attributable to escalation rather than to re-signing. Tags each candidate `rejected` / `POSSIBLE BYPASS` / `FLAG` off exact status+body, never off a reworded rejection message |
-| `jsmine.py` | Bundles and rendered HTML → routes, direct calls, native `fetch`, discovered request wrappers, and HTML form methods. Keeps probe-ready output annotation-free, then adds provenance and high-value action-route ranking; warns loudly when routes exist but no methods map |
+| `graphqlquick.py` | Bounded post-auth, read-only GraphQL fast track: anonymous/auth reachability, Query introspection, validation-error schema oracle when introspection is disabled, ID `1`/self checks, independent sensitive-field probes, header/body flag scanning, and hard stops on a flag, rate limit, gateway failure, or request budget. Never generates mutations |
+| `jsmine.py` | Bundles and rendered HTML → routes, direct calls, native `fetch`, discovered request wrappers, HTML form methods, and complete named GraphQL operations with roots, variables, identity signals, and provenance. Keeps probe-ready output annotation-free, then adds provenance and high-value action-route ranking; warns loudly when routes exist but no methods map |
 | `jsharvest.py` | Fetches pages and valid `<script src>` bundles plus source maps, quarantines literal JS/template hrefs and vendor bundles, rejects error/HTML bodies masquerading as JavaScript, runs `jsmine.py`, and writes `jsmine.txt`, `methods.txt`, `dynamic-links.txt`, and `source-provenance.tsv` |
 | `quickrecon.py` | SPA-fallback-aware existence check with optional action-route method fallback: calibrated GET/POST bodies, route-specific `Allow`, and safe `POST {}` validation probes. A 429 is inconclusive; gateway failures trip a circuit breaker |
 | `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags. Verdicts: `not-a-route`, `auth-required`, `public-error` (same non-fallback error regardless of auth, on a status other than 401/403 — not a leak), `NO-AUTH LEAK`, `NO-AUTH DATA` |
@@ -70,6 +71,10 @@ browser and exfiltrate to a listener you control.
 python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
 python3 ~/.claude/skills/web-ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
+
+# run this in the same authenticated parallel burst as jwtquick.py when GraphQL is mapped
+python3 ~/.claude/skills/web-ctf/scripts/graphqlquick.py \
+  --url <target>/api/graphql --token "$TOKEN" --id "$YOUR_ID" --out recon/graphqlquick
 
 # re-harvest bundles and rendered forms once authenticated
 python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ \
