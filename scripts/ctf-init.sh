@@ -18,6 +18,7 @@ fi
 if [[ "$TARGET" != http* ]]; then
   TARGET="http://$TARGET"
 fi
+TARGET="${TARGET%/}"
 
 # Sanitize name
 NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
@@ -28,18 +29,79 @@ SECLISTS="${SECLISTS:-/opt/security-tools/SecLists}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 WORKDIR="$CTF_ROOT/$NAME"
-RECON="$WORKDIR/recon"
-EXPLOITS="$WORKDIR/exploits"
-LOOT="$WORKDIR/loot"
+INSTANCE_ID=$(python3 - "$TARGET" <<'PY'
+import re, sys
+from urllib.parse import urlsplit
+p = urlsplit(sys.argv[1])
+host = (p.hostname or "target").lower()
+if p.port:
+    host += "-%d" % p.port
+path = p.path.strip("/")
+if path:
+    host += "-" + path
+print(re.sub(r"[^a-z0-9._-]+", "-", host).strip("-") or "target")
+PY
+)
+INSTANCE_DIR="$WORKDIR/instances/$INSTANCE_ID"
+RECON="$INSTANCE_DIR/recon"
+EXPLOITS="$INSTANCE_DIR/exploits"
+LOOT="$INSTANCE_DIR/loot"
+AUTH_DIR="$INSTANCE_DIR/auth"
+STATE_DIR="$WORKDIR/state"
+CURRENT_STATE="$STATE_DIR/current.json"
+
+line_count() {
+  if [[ -f "$1" ]]; then
+    awk 'END { print NR + 0 }' "$1"
+  else
+    echo 0
+  fi
+}
+
+match_count() {
+  local pattern="$1"
+  local file="$2"
+  local count
+  if [[ ! -f "$file" ]]; then
+    echo 0
+    return
+  fi
+  count=$(grep -cE "$pattern" "$file" 2>/dev/null || true)
+  echo "${count:-0}"
+}
 
 echo "[*] Target:    $TARGET"
 echo "[*] Name:      $NAME"
 echo "[*] Platform:  $PLATFORM"
 echo "[*] Workspace: $WORKDIR"
+echo "[*] Instance:  $INSTANCE_ID"
 echo ""
 
 # Scaffold
-mkdir -p "$RECON" "$EXPLOITS" "$LOOT"
+mkdir -p "$RECON" "$EXPLOITS" "$LOOT" "$AUTH_DIR" "$STATE_DIR"
+
+PREVIOUS_TARGET=""
+if [[ -f "$CURRENT_STATE" ]]; then
+  PREVIOUS_TARGET=$(python3 - "$CURRENT_STATE" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        print(json.load(fh).get("target", ""))
+except (OSError, ValueError):
+    pass
+PY
+)
+fi
+
+# A stable current pointer avoids mixing tokens/cookies/recon across reprovisions.
+ln -sfn "instances/$INSTANCE_ID" "$WORKDIR/current"
+for alias in recon exploits loot auth; do
+  if [[ -L "$WORKDIR/$alias" || ! -e "$WORKDIR/$alias" ]]; then
+    ln -sfn "current/$alias" "$WORKDIR/$alias"
+  else
+    echo "[!] Preserving legacy $WORKDIR/$alias; use $WORKDIR/current/$alias for this instance"
+  fi
+done
 
 # Flag format
 case "$PLATFORM" in
@@ -72,6 +134,36 @@ else
   echo "[*] Preserving existing $WORKDIR/WORKLOG.md"
 fi
 
+if [[ -n "$PREVIOUS_TARGET" && "$PREVIOUS_TARGET" != "$TARGET" ]]; then
+cat >> "$WORKDIR/WORKLOG.md" << EOF
+
+## Reprovisioned — $(date '+%Y-%m-%d %H:%M')
+
+**Previous target:** $PREVIOUS_TARGET
+**Current target:** $TARGET
+**Current evidence:** instances/$INSTANCE_ID/
+
+EOF
+  echo "[*] Recorded target change without overwriting prior evidence"
+fi
+
+python3 - "$CURRENT_STATE" "$TARGET" "$INSTANCE_ID" "$PLATFORM" <<'PY'
+import datetime, json, os, sys
+dest, target, instance, platform = sys.argv[1:]
+tmp = dest + ".tmp.%d" % os.getpid()
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump({
+        "target": target,
+        "instance": instance,
+        "platform": platform,
+        "updated_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "recon": "instances/%s/recon" % instance,
+        "auth": "instances/%s/auth" % instance,
+    }, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+os.replace(tmp, dest)
+PY
+
 echo "[*] Workspace scaffolded"
 echo ""
 
@@ -93,7 +185,14 @@ if ! python3 "$SCRIPT_DIR/jsharvest.py" --base "$TARGET" --out "$RECON" \
   echo "[!] JS/HTML harvest failed; see recon/jsharvest.log"
   tail -5 "$RECON/jsharvest.log" 2>/dev/null
 fi
-echo "[*] JS harvest done — $(grep -c '^' "$RECON/methods.txt" 2>/dev/null || echo 0) METHOD -> PATH entries (recon/methods.txt, recon/jsmine.txt)"
+METHOD_COUNT=$(line_count "$RECON/methods.txt")
+ROUTE_COUNT=$(sed -n 's/^=== ROUTES (\([0-9][0-9]*\)) ===$/\1/p' "$RECON/jsmine.txt" 2>/dev/null | head -1)
+ROUTE_COUNT="${ROUTE_COUNT:-0}"
+echo "[*] JS harvest done — $METHOD_COUNT METHOD -> PATH entries ($RECON/methods.txt, $RECON/jsmine.txt)"
+if [[ "$ROUTE_COUNT" -gt 0 && "$METHOD_COUNT" -eq 0 ]]; then
+  echo "[!] HIGH PRIORITY: $ROUTE_COUNT route(s) found but zero HTTP methods mapped"
+  echo "[!] POST-only endpoints remain unknown; quickcheck will run method fallback discovery"
+fi
 echo ""
 
 echo "[*] Firing background recon in parallel..."
@@ -121,7 +220,8 @@ JOB_META=$!
 (
   echo "[job:quickcheck] starting"
   python3 "$SCRIPT_DIR/quickrecon.py" --base "$TARGET" --out "$RECON/quickcheck_probe" \
-    --hitfile "$RECON/quickcheck_hits.txt" --paths \
+    --hitfile "$RECON/quickcheck_hits.txt" --discover-methods \
+    --methodfile "$RECON/methods.txt" --paths \
     admin api graphql api/graphql v1 v2 api/v1 api/v2 \
     swagger swagger-ui swagger.json api-docs openapi.json \
     console debug phpinfo.php .git/HEAD .env admin/login \
@@ -142,7 +242,7 @@ JOB_QUICK=$!
     -w "$SECLISTS/Discovery/Web-Content/raft-medium-directories.txt" \
     --depth 2 -t 20 --timeout 8 -q \
     -o "$RECON/ferox.txt" > "$RECON/ferox.log" 2>&1; then
-    echo "[job:ferox] done — $(grep -cE '^[0-9]{3} ' "$RECON/ferox.txt" 2>/dev/null || echo 0) hits"
+    echo "[job:ferox] done — $(match_count '^[0-9]{3} ' "$RECON/ferox.txt") hits"
   else
     echo "[job:ferox] failed — see recon/ferox.log"
     tail -5 "$RECON/ferox.log" 2>/dev/null
@@ -157,7 +257,7 @@ if [[ "$PLATFORM" != "bugforge" ]]; then
     nuclei -u "$TARGET" -severity medium,high,critical \
       -timeout 5 -silent \
       -o "$RECON/nuclei.txt" 2>/dev/null
-    echo "[job:nuclei] done — $(wc -l < "$RECON/nuclei.txt" 2>/dev/null || echo 0) findings"
+    echo "[job:nuclei] done — $(line_count "$RECON/nuclei.txt") findings"
   ) &
   JOB_NUCLEI=$!
 else
@@ -210,4 +310,30 @@ grep -rE 'HTB\{|bug\{|flag\{' "$RECON/" 2>/dev/null && echo "  FLAG FOUND ^^^" |
 
 echo ""
 echo "[*] All output saved to: $WORKDIR"
+echo "[*] Current instance evidence: $INSTANCE_DIR"
+
+# Emit an end-to-end hook sentinel. The PostToolUse hook handles this only after
+# ctf-init exits, so the exact marker must be verified on the next tool call.
+PREVIOUS_HOOK_SENTINEL=""
+if [[ -f "$STATE_DIR/flaghook-expected.txt" ]]; then
+  PREVIOUS_HOOK_SENTINEL=$(head -1 "$STATE_DIR/flaghook-expected.txt")
+fi
+if [[ -n "$PREVIOUS_HOOK_SENTINEL" ]]; then
+  PREVIOUS_HOOK_VERIFIED=""
+  for marker in "${CTF_FLAGHOOK_MARKER:-}" "$HOME/.codex/ctf-flaghook-ok" "$HOME/.claude/ctf-flaghook-ok"; do
+    if [[ -n "$marker" && -f "$marker" ]] && grep -Fq "$PREVIOUS_HOOK_SENTINEL" "$marker" 2>/dev/null; then
+      PREVIOUS_HOOK_VERIFIED="$marker"
+    fi
+  done
+  if [[ -n "$PREVIOUS_HOOK_VERIFIED" ]]; then
+    echo "[*] Previous flag-hook sentinel verified in $PREVIOUS_HOOK_VERIFIED"
+  else
+    echo "[!] Previous flag-hook sentinel was not observed; PostToolUse may be inactive"
+  fi
+fi
+HOOK_NONCE=$(printf '%s' "$NAME-$TARGET-$$-$(date +%s)" | shasum -a 256 | cut -c1-16)
+HOOK_SENTINEL="bug{CodexHarnessHookCheck_$HOOK_NONCE}"
+printf '%s\n' "$HOOK_SENTINEL" > "$STATE_DIR/flaghook-expected.txt"
+echo "[!] Flag hook activation for this run is pending; inspect responses manually until verified"
+echo "[!] Next-call sentinel check: $HOOK_SENTINEL"
 echo "[*] Now run: /web-ctf $PLATFORM $TARGET $NAME"

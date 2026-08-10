@@ -10,11 +10,21 @@ and .concat() route building, and the client router table.
 """
 import ast
 import glob
+import json
 import os
 import re
 import sys
 
 PATH_CHARS = r"a-zA-Z0-9/_\-?=&.:{}$"
+STATIC_EXT = re.compile(r'\.(?:js|mjs|css|map|png|jpe?g|gif|svg|ico|woff2?|ttf|pdf|zip)(?:[?#]|$)', re.I)
+ACTION_ROUTE = re.compile(
+    r'/(?:[^/?#]+/)*(recover|reset|verify|forgot|search|filter|query|graphql|login|register|signup)'
+    r'(?:[/?#-]|$)', re.I)
+VENDOR_BASENAME = re.compile(
+    r'^(?:socket\.io|engine\.io|react(?:-dom)?|runtime|polyfills?|vendors?)(?:[.\-_]|$)', re.I)
+VENDOR_SOURCE = re.compile(
+    r'(?:^|/)(?:node_modules|vendor|vendors)/(?:.*)|'
+    r'webpack://(?:engine\.io|socket\.io|react(?:-dom)?|webpack)(?:[./@-]|$)', re.I)
 
 
 def parse_call_args(tail):
@@ -72,6 +82,39 @@ def literal_string(expr):
         return None
 
 
+def source_is_vendor(path):
+    """Classify sources that should be retained as raw evidence but not mined.
+
+    Some vendor source maps use webpack package namespaces instead of a literal
+    node_modules/ path (Socket.IO is a common example), so path-segment checks
+    alone are not sufficient.
+    """
+    norm = path.replace("\\", "/")
+    parts = [p for p in norm.split("/") if p]
+    return (bool(VENDOR_SOURCE.search(norm))
+            or any(p in ("node_modules", "vendor", "vendors") for p in parts)
+            or bool(parts and VENDOR_BASENAME.search(parts[-1])))
+
+
+def sourcemap_blobs(path):
+    """Load only application sourcesContent from a raw source map."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return []
+    sources = data.get("sources") or []
+    contents = data.get("sourcesContent") or []
+    if len(sources) != len(contents):
+        return []
+    out = []
+    for source, content in zip(sources, contents):
+        if content is None or source_is_vendor(source):
+            continue
+        out.append(("%s!%s" % (path, source), content))
+    return out
+
+
 def concat_route(base, tail, named=False):
     """Reconstruct a route from a minified ``.concat(...)`` call.
 
@@ -101,6 +144,129 @@ def template_route(path):
     return re.sub(r'\$\{[^}]+\}', '{...}', path)
 
 
+def route_from_expr(expr):
+    """Turn a first request argument into a probe-ready route when possible."""
+    expr = expr.strip()
+    literal = literal_string(expr)
+    if literal is not None:
+        return literal if literal.startswith("/") else None
+    if len(expr) >= 2 and expr[0] == "`" and expr[-1] == "`":
+        path = template_route(expr[1:-1])
+        return path if path.startswith("/") else None
+    m = re.match(r'(["\'])(/[^"\']+)\1\s*\.concat\((.*)', expr, re.S)
+    if m:
+        return concat_route(m.group(2), m.group(3))
+    return None
+
+
+def object_property(expr, name):
+    """Read a quoted or bare string-valued property from a JS object literal."""
+    m = re.search(r'(?:^|[,{}])\s*["\']?%s["\']?\s*:\s*(["\'`])(.+?)\1'
+                  % re.escape(name), expr, re.I | re.S)
+    return m.group(2).strip() if m else None
+
+
+def discover_request_wrappers(js):
+    """Find helper names whose definitions delegate to fetch/axios.
+
+    This deliberately identifies the helper definition first instead of treating
+    every function named ``request`` as an HTTP call. It covers declarations,
+    assigned arrow functions, and object/class method syntax.
+    """
+    names = {"fetch", "apiRequest", "apiFetch", "fetchJson", "requestJson"}
+    definitions = [
+        r'\bfunction\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{',
+        r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{',
+        r'\b(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{',
+    ]
+    keywords = {"if", "for", "while", "switch", "catch", "with"}
+    for pattern in definitions:
+        for match in re.finditer(pattern, js):
+            if match.group(1) in keywords:
+                continue
+            # Stop at the matching function brace so a later, unrelated fetch
+            # does not cause every preceding function to look like a wrapper.
+            body, depth = [], 1
+            quote, escaped = None, False
+            for ch in js[match.end():match.end() + 12000]:
+                if quote:
+                    body.append(ch)
+                    if escaped:
+                        escaped = False
+                    elif ch == "\\":
+                        escaped = True
+                    elif ch == quote:
+                        quote = None
+                    continue
+                if ch in "'\"`":
+                    quote = ch
+                    body.append(ch)
+                elif ch == "{":
+                    depth += 1
+                    body.append(ch)
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                    body.append(ch)
+                else:
+                    body.append(ch)
+            if re.search(r'\b(?:fetch\s*\(|axios(?:\.|\s*\())', "".join(body)):
+                names.add(match.group(1))
+    return names
+
+
+def generic_request_lines(js, wrapper_names):
+    """Extract methods from fetch/custom-wrapper call sites with balanced args."""
+    lines = []
+    call = re.compile(r'(?<![\w$])((?:[A-Za-z_$][\w$]*\.)*([A-Za-z_$][\w$]*))\s*\(')
+    for match in call.finditer(js):
+        full_name, terminal = match.group(1), match.group(2)
+        if terminal not in wrapper_names and full_name != "axios.request":
+            continue
+        args = parse_call_args(js[match.end():])
+        if not args:
+            continue
+        route = route_from_expr(args[0])
+        options = args[1] if len(args) > 1 else ""
+        if route is None and args[0].lstrip().startswith("{"):
+            raw_url = object_property(args[0], "url")
+            if raw_url:
+                route = template_route(raw_url)
+            options = args[0]
+        if not route or not route.startswith("/") or STATIC_EXT.search(route):
+            continue
+        method = object_property(options, "method") or "GET"
+        method = method.upper()
+        if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
+            continue
+        lines.append("%-6s %s" % (method, route))
+    return lines
+
+
+def extract_method_lines(js, wrapper_names):
+    """Return every probe-ready HTTP method/path line from one source blob."""
+    calls = re.findall(r'[\w$]{1,32}\.(get|post|put|delete|patch)\s*\(\s*(["\'])'
+                       r'(/[^"\']+)\2(?!\s*\.concat\()', js)
+    call_lines = ["%-6s %s" % (method.upper(), path) for method, _, path in calls]
+    template_calls = re.findall(
+        r'[\w$]{1,32}\.(get|post|put|delete|patch)\s*\(\s*`(/[^`]+)`', js)
+    template_lines = ["%-6s %s" % (method.upper(), template_route(path))
+                      for method, path in template_calls]
+    concat_calls = re.findall(r'[\w$]{1,32}\.(get|post|put|delete|patch)\s*\(\s*["\']'
+                              r'(/[^"\']+)["\']\s*\.concat\((?=([^;\n]{0,90}))', js)
+    concat_lines = ["%-6s %s" % (method.upper(), concat_route(path, tail))
+                    for method, path, tail in concat_calls]
+    forms = []
+    for tag in re.findall(r'<form\b[^>]*>', js, re.I):
+        attrs = dict((k.lower(), v) for k, _, v in re.findall(
+            r'([:\w-]+)\s*=\s*(["\'])(.*?)\2', tag, re.I | re.S))
+        action = attrs.get("action", "")
+        if action.startswith("/"):
+            forms.append("%-6s %s" % (attrs.get("method", "GET").upper(), action))
+    return call_lines + template_lines + concat_lines + forms + generic_request_lines(js, wrapper_names)
+
+
 def load(args):
     blobs = []
     for a in args:
@@ -111,6 +277,12 @@ def load(args):
         else:
             files = [a]
         for f in files:
+            norm = f.replace("\\", "/")
+            if source_is_vendor(norm):
+                continue
+            if f.lower().endswith(".map"):
+                blobs.extend(sourcemap_blobs(f))
+                continue
             try:
                 with open(f, encoding="utf-8", errors="replace") as fh:
                     blobs.append((f, fh.read()))
@@ -136,6 +308,19 @@ def main():
         return 1
     print("mined %d file(s): %s" % (len(blobs), ", ".join(os.path.basename(f) for f, _ in blobs)[:200]))
     all_js = "\n".join(b for _, b in blobs)
+    wrapper_names = discover_request_wrappers(all_js)
+    physical = [name.split("!", 1)[0] for name, _ in blobs]
+    try:
+        source_root = os.path.commonpath(physical)
+        if not os.path.isdir(source_root):
+            source_root = os.path.dirname(source_root)
+    except ValueError:
+        source_root = ""
+
+    def source_label(filename):
+        physical_name, sep, embedded = filename.partition("!")
+        label = os.path.relpath(physical_name, source_root) if source_root else physical_name
+        return label + ("!" + embedded if sep else "")
 
     # ---- routes -------------------------------------------------------------
     routes = set()
@@ -147,6 +332,7 @@ def main():
     routes |= set(re.findall(r'(?:fetch|axios\.(?:get|post|put|delete|patch|request))\s*\(\s*["\']([^"\'\s]+)', all_js))
     # template literals
     routes |= set(re.findall(r'`(/[%s]+)`' % PATH_CHARS, all_js))
+    routes = {r for r in routes if not STATIC_EXT.search(r)}
     section("ROUTES", routes)
 
     # ---- .concat() dynamic route building -----------------------------------
@@ -161,40 +347,36 @@ def main():
     # source maps retain longer names such as axios. Mine ordinary quoted calls
     # and template literals; exclude quoted bases immediately followed by
     # .concat(), which are reconstructed below.
-    calls = re.findall(r'[\w$]{1,32}\.(get|post|put|delete|patch)\s*\(\s*(["\'])'
-                       r'(/[^"\']+)\2(?!\s*\.concat\()', all_js)
-    call_lines = ["%-6s %s" % (method.upper(), path) for method, _, path in calls]
-    template_calls = re.findall(
-        r'[\w$]{1,32}\.(get|post|put|delete|patch)\s*\(\s*`(/[^`]+)`', all_js)
-    template_lines = ["%-6s %s" % (method.upper(), template_route(path))
-                      for method, path in template_calls]
-    # Capture the concat() argument too. A base path with no trailing "/" is
-    # a query-string builder when its tail contains a quoted ?param= literal;
-    # resolve that shape now so probe.py does not substitute its path id into
-    # the bare word (/api/admin/posts{...} -> /api/admin/posts1).
-    # Keep the tail in a zero-width lookahead: consuming it can swallow a nearby
-    # minified call site and silently drop the next route from re.findall().
-    concat_calls = re.findall(r'[\w$]{1,32}\.(get|post|put|delete|patch)\s*\(\s*["\']'
-                              r'(/[^"\']+)["\']\s*\.concat\((?=([^;\n]{0,90}))', all_js)
-    concat_lines = ["%-6s %s" % (method.upper(), concat_route(path, tail))
-                    for method, path, tail in concat_calls]
+    method_lines = extract_method_lines(all_js, wrapper_names)
+    section("METHOD -> PATH", method_lines)
+    if routes and not method_lines:
+        print("\n[!] HIGH PRIORITY: routes were found but no HTTP methods were mapped")
+        print("[!] Run wrapper/OPTIONS/POST fallback discovery before treating routes as absent")
 
-    # Server-rendered apps often expose their complete route map as ordinary
-    # HTML forms even when every linked JS asset is unavailable. Attribute order
-    # is deliberately irrelevant here; method defaults to GET per HTML.
-    forms = []
-    for tag in re.findall(r'<form\b[^>]*>', all_js, re.I):
-        attrs = dict((k.lower(), v) for k, _, v in re.findall(
-            r'([:\w-]+)\s*=\s*(["\'])(.*?)\2', tag, re.I | re.S))
-        action = attrs.get("action", "")
-        if action.startswith("/"):
-            forms.append("%-6s %s" % (attrs.get("method", "GET").upper(), action))
+    # Keep the probe-ready section above annotation-free, then provide analyst
+    # provenance separately so a high-value application call is not buried under
+    # a large bundle corpus.
+    provenance = {}
+    for filename, blob in blobs:
+        label = source_label(filename).replace("\\", "/")
+        for line in extract_method_lines(blob, wrapper_names):
+            provenance.setdefault(line, set()).add(label)
+    provenance_lines = ["%s [%s; high]" % (line, ", ".join(sorted(paths)))
+                        for line, paths in provenance.items()]
+    section("METHOD PROVENANCE", provenance_lines)
 
-    section("METHOD -> PATH",
-            call_lines
-            + template_lines
-            + concat_lines
-            + forms)
+    high_value = []
+    for line in sorted(set(method_lines)):
+        match = ACTION_ROUTE.search(line)
+        if not match:
+            continue
+        keyword = match.group(1).lower()
+        score = 100 if keyword in ("recover", "reset", "verify", "forgot") else 80
+        if keyword in ("login", "register", "signup"):
+            score = 60
+        sources = ", ".join(sorted(provenance.get(line, [])))
+        high_value.append("score=%d %s [%s]" % (score, line, sources or "unknown source"))
+    section("HIGH-VALUE ACTION ROUTES", high_value)
 
     # ---- client router (reveals pages, hence features) ----------------------
     section("ROUTER PATHS", re.findall(r'path:\s*["\']([^"\']+)["\']', all_js))

@@ -48,6 +48,13 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 SCRIPT_SRC = re.compile(r'<script\b[^>]*\bsrc\s*=\s*["\']([^"\']+)["\']', re.I)
 PAGE_HREF = re.compile(r'<a\b[^>]*\bhref\s*=\s*["\']([^"\']+)["\']', re.I)
 SOURCEMAP = re.compile(r'//[#@]\s*sourceMappingURL=(\S+)|/\*[#@]\s*sourceMappingURL=(\S+?)\s*\*/', re.I)
+DYNAMIC_HREF = re.compile(r'\$\{|\{\{|<%|%>|(?:^|[/{])\s*(?:if|else|return)\b', re.I)
+VENDOR_ASSET = re.compile(
+    r'(?:^|/)(?:socket\.io|engine\.io|vendor|vendors|runtime|polyfills?)(?:[./_-]|$)|'
+    r'(?:^|[./_-])(?:socket\.io|engine\.io|vendors?)(?:[.\-_]|$)', re.I)
+VENDOR_SOURCE = re.compile(
+    r'(?:^|/)(?:node_modules|vendor|vendors)/|'
+    r'webpack://(?:engine\.io|socket\.io|react(?:-dom)?|webpack)(?:[./@-]|$)', re.I)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 JSMINE = os.path.join(HERE, "jsmine.py")
@@ -84,11 +91,20 @@ def usable_asset(response, url, kind="javascript"):
     return True
 
 
-def page_links(html, current_url, base):
-    """Return safe same-origin GET pages; API/download/static URLs are not crawled."""
+def dynamic_href(href):
+    """True when an href is a client-side expression, not a requestable URL."""
+    return bool(DYNAMIC_HREF.search(href) or href.count("{") != href.count("}"))
+
+
+def page_links(html, current_url, base, dynamic=None):
+    """Return safe same-origin GET pages; quarantine JS/template expressions."""
     origin = urlsplit(base)
     out = []
     for href in PAGE_HREF.findall(html):
+        if dynamic_href(href):
+            if dynamic is not None:
+                dynamic.append("%s\t%s" % (current_url, href))
+            continue
         url = urljoin(current_url, href).split("#", 1)[0]
         parsed = urlsplit(url)
         if (parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc):
@@ -102,7 +118,17 @@ def page_links(html, current_url, base):
     return out
 
 
-def extract_sourcemap(map_path, out_dir):
+def is_vendor_asset(url):
+    """Classify well-known vendor/runtime bundles by their URL or filename."""
+    return bool(VENDOR_ASSET.search(urlsplit(url).path))
+
+
+def is_vendor_source(source, vendor_bundle=False):
+    norm = source.replace("\\", "/")
+    return vendor_bundle or bool(VENDOR_SOURCE.search(norm))
+
+
+def extract_sourcemap(map_path, out_dir, vendor_bundle=False):
     """Explode a source map's embedded sourcesContent into real files under out_dir/src/.
 
     DevTools reconstructs this same tree client-side purely from data already in the
@@ -114,30 +140,32 @@ def extract_sourcemap(map_path, out_dir):
     jsmine's pattern shapes (comment syntax, key:"value") if the hint is plain prose.
     Exploding to real files gets a clean, greppable, human-readable app-only tree instead.
 
-    Returns the list of extracted (non-vendor) relative paths.
+    Returns (application paths extracted, vendor paths skipped).
     """
     try:
         with open(map_path, encoding="utf-8", errors="replace") as fh:
             m = json.load(fh)
     except (OSError, json.JSONDecodeError) as e:
         print("      [!] could not parse source map: %s" % e)
-        return []
+        return [], []
 
     sources = m.get("sources") or []
     contents = m.get("sourcesContent") or []
     if not sources or not contents or len(sources) != len(contents):
-        return []
+        return [], []
 
-    NOISE = ("node_modules/", "webpack/bootstrap", "webpack/runtime")
     src_root = os.path.join(out_dir, "src")
-    extracted = []
+    extracted, skipped_vendor = [], []
     for src, content in zip(sources, contents):
         if content is None:
             continue
         norm = src.replace("\\", "/").lstrip("./")
         while norm.startswith("../"):
             norm = norm[3:]
-        if not norm or any(n in norm for n in NOISE):
+        if not norm:
+            continue
+        if is_vendor_source(norm, vendor_bundle=vendor_bundle):
+            skipped_vendor.append(norm)
             continue
         dest = os.path.join(src_root, *norm.split("/"))
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -147,7 +175,7 @@ def extract_sourcemap(map_path, out_dir):
             extracted.append(norm)
         except OSError as e:
             print("      [!] could not write %s: %s" % (norm, e))
-    return extracted
+    return extracted, skipped_vendor
 
 
 def safe_filename(url, used):
@@ -238,8 +266,9 @@ def main():
 
     page_blobs = [(root_url, root_html)]
     queue = [urljoin(root_url, p) for p in a.page]
+    dynamic_links = []
     if a.crawl_pages:
-        queue.extend(page_links(root_html, root_url, base))
+        queue.extend(page_links(root_html, root_url, base, dynamic_links))
     seen_pages = {root_url}
     pages_dir = os.path.join(a.out, "pages")
     fetched_pages = 0
@@ -270,7 +299,15 @@ def main():
         page_blobs.append((page_url, r.text))
         print("  [+] page %s -> %s (%d bytes)" % (page_url, page_path, len(r.text)))
         if a.crawl_pages:
-            queue.extend(page_links(r.text, page_url, base))
+            queue.extend(page_links(r.text, page_url, base, dynamic_links))
+
+    dynamic_path = os.path.join(a.out, "dynamic-links.txt")
+    with open(dynamic_path, "w", encoding="utf-8") as fh:
+        for item in sorted(set(dynamic_links)):
+            fh.write(item + "\n")
+    if dynamic_links:
+        print("[*] quarantined %d dynamic href expression(s) in %s (not requested)" %
+              (len(set(dynamic_links)), dynamic_path))
 
     combined_html = "\n".join(body for _, body in page_blobs)
     srcs = SCRIPT_SRC.findall(combined_html)
@@ -280,15 +317,25 @@ def main():
     js_urls = [u for u in resolved if urlsplit(u).path.lower().endswith((".js", ".mjs"))]
     print("[*] %d .js/.mjs bundle(s) to download" % len(js_urls))
 
-    used_names = set(os.path.basename(p) for p in glob.glob(os.path.join(a.out, "*")))
+    vendor_dir = os.path.join(a.out, "vendor")
+    used_names = {
+        "app": set(os.path.basename(p) for p in glob.glob(os.path.join(a.out, "*"))),
+        "vendor": set(os.path.basename(p) for p in glob.glob(os.path.join(vendor_dir, "*"))),
+    }
+    provenance = []
     downloaded, maps, reused, skipped = 0, 0, 0, 0
     for url in js_urls:
         r = fetch(sess, url, headers)
         if not usable_asset(r, url):
             skipped += 1
             continue
-        fn, was_reused = asset_filename(url, used_names, a.out, r.text)
-        path = os.path.join(a.out, fn)
+        vendor_bundle = is_vendor_asset(url)
+        asset_class = "vendor" if vendor_bundle else "app"
+        asset_dir = vendor_dir if vendor_bundle else a.out
+        os.makedirs(asset_dir, exist_ok=True)
+        fn, was_reused = asset_filename(url, used_names[asset_class], asset_dir, r.text)
+        path = os.path.join(asset_dir, fn)
+        provenance.append("bundle\t%s\t%s\t%s" % (asset_class, url, path))
         if was_reused:
             reused += 1
             print("  [=] %s -> %s (identical; reused)" % (url, fn))
@@ -307,8 +354,11 @@ def main():
                 map_url = urljoin(url, map_ref)
                 mr = fetch(sess, map_url, headers)
                 if usable_asset(mr, map_url, kind="source map"):
-                    map_fn, map_reused = asset_filename(map_url, used_names, a.out, mr.text)
-                    map_path = os.path.join(a.out, map_fn)
+                    map_fn, map_reused = asset_filename(
+                        map_url, used_names[asset_class], asset_dir, mr.text)
+                    map_path = os.path.join(asset_dir, map_fn)
+                    provenance.append("source-map\t%s\t%s\t%s" %
+                                      (asset_class, map_url, map_path))
                     if map_reused:
                         reused += 1
                         print("      sourceMappingURL -> %s (identical; reused)" % map_fn)
@@ -318,16 +368,27 @@ def main():
                         maps += 1
                         print("      sourceMappingURL -> %s (%d bytes)" % (map_fn, len(mr.text)))
 
-                    extracted = extract_sourcemap(map_path, a.out)
+                    extracted, vendor_sources = extract_sourcemap(
+                        map_path, a.out, vendor_bundle=vendor_bundle)
                     if extracted:
                         print("      [+] exploded sourcesContent -> %s/src/ (%d app file(s), "
                               "vendor/node_modules excluded):" % (a.out.rstrip("/"), len(extracted)))
                         for p in sorted(extracted):
                             print("          " + p)
+                            provenance.append("source\tapp\t%s\t%s" % (map_url, p))
+                    if vendor_sources:
+                        print("      [=] retained raw map; skipped %d vendor source(s) from mining" %
+                              len(vendor_sources))
+                        for p in vendor_sources:
+                            provenance.append("source\tvendor\t%s\t%s" % (map_url, p))
 
     print("[*] downloaded %d bundle(s), reused %d identical asset(s), "
           "skipped %d invalid bundle(s), %d new source map(s)" %
           (downloaded, reused, skipped, maps))
+    with open(os.path.join(a.out, "source-provenance.tsv"), "w", encoding="utf-8") as fh:
+        fh.write("kind\tclassification\turl\tlocal-source\n")
+        for row in provenance:
+            fh.write(row + "\n")
 
     proc = subprocess.run([sys.executable, JSMINE, a.out], capture_output=True, text=True)
     jsmine_out = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
@@ -343,6 +404,13 @@ def main():
     print("[*] %d METHOD -> PATH entries saved to %s" % (len(methods), methods_path))
     for entry in methods:
         print("    " + entry)
+
+    route_match = re.search(r'^=== ROUTES \((\d+)\) ===$', jsmine_out, re.M)
+    route_count = int(route_match.group(1)) if route_match else 0
+    if route_count and not methods:
+        print("[!] HIGH PRIORITY: %d route(s) were found but no HTTP methods were mapped" %
+              route_count)
+        print("[!] Run method fallback discovery; do not treat POST-only routes as absent")
 
     return 0
 

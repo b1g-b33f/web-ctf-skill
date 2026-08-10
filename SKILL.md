@@ -162,9 +162,8 @@ Use these instead of retyping one-liners — they encode fixes for mistakes that
 # refusing route + scan headers/body for the flag. Run it the moment you hold a token.
 python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
-# mine bundles and rendered HTML: routes (incl. query strings + .concat), form methods,
-# comments, and narrative hint text (flavor-text sentences revealing the bug, e.g. a
-# success-screen message that spells out a weak secret in plain English)
+# mine bundles/rendered HTML: direct calls, fetch(url,{method}), discovered request
+# wrappers, forms, provenance, ranked action routes, comments, and narrative hints
 python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<name>/recon/
 
 # ctf-init.sh already ran this pre-auth; re-run authenticated, apps sometimes
@@ -187,6 +186,14 @@ python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
 
 # low-volume SQLi fast-track — run this BEFORE sqlmap → references/injection.md §C
 python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+
+# guarded NoSQL operator oracle — explicit endpoint/field allowlist, paired guards,
+# query-shape mapping, $gt enumeration, and variable-length printable extraction.
+# Login/register/password fields are refused unless --dangerous-auth is explicit.
+python3 ~/.claude/skills/web-ctf/scripts/nosqlquick.py \
+  --url "<target>/api/account/recover" --field email --field backupCode \
+  --baseline email=none@example.test --baseline backupCode=invalid \
+  --success-json status=verified --probe --map-query-shape
 
 # stored-response SSRF as an arbitrary read: --sweep finds internal services and
 # probes admin paths on each; or name paths directly
@@ -212,13 +219,19 @@ cross-origin verb policy and does not prove that handlers exist for those verbs.
 
 **Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
 
+**Routes > 0 with methods = 0 is a harness alarm, not an empty result.** `jsmine.py` and
+`jsharvest.py` warn on that invariant; `ctf-init.sh` then runs action-shaped routes through
+route-specific `Allow` and calibrated `POST {}` fallback discovery. Literal `${...}` hrefs are
+saved to `dynamic-links.txt`, never requested, and known vendor bundles/maps are retained under
+`recon/vendor/` but excluded from mining.
+
 A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Offsec/Web_CTF/.claude/settings.json` — placement rules are in CLAUDE.md) scans command results for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
 
 **Verify hook activation end-to-end after every app restart or tool-surface change.** In one tool call, print a unique `bug{CodexHarnessHookCheck_<nonce>}` marker; in the next tool call, verify that exact marker landed in `~/.claude/ctf-flaghook-ok`. The hook treats this marker as a health check, not a real flag, so it never touches `ctf-flags.log`. Invoking `flaghook.py` directly proves only the script is correct, not that `PostToolUse` actually fires — a stale or untrusted hook config fails silently. If the sentinel is absent, record `flag hook inactive` in `WORKLOG.md` and keep scanning every response manually.
 
 ## Environment
 
-Paths, tool invocations, and wordlists are in `~/Offsec/Web_CTF/CLAUDE.md` — that's already in context; don't re-derive it. Exploit scripts go in `~/Offsec/Web_CTF/Python/<challenge-name>/`. Recon output goes in `~/Offsec/Web_CTF/CTF/<challenge-name>/recon/`.
+Paths, tool invocations, and wordlists are in `~/Offsec/Web_CTF/CLAUDE.md` — that's already in context; don't re-derive it. Exploit scripts go in `~/Offsec/Web_CTF/Python/<challenge-name>/`. `ctf-init.sh` stores each target under `~/Offsec/Web_CTF/CTF/<challenge-name>/instances/<hostname>/` and atomically repoints `current`; fresh workspaces also expose compatibility links such as `<challenge-name>/recon/`. Use `current/auth/` for tokens and cookie jars so reprovisioned instances cannot silently reuse stale credentials.
 
 CLAUDE.md's shell gotchas (`cd` not persisting, no bare `python`) bite hardest here.
 For `cd`: a `$TOKEN` set in one Bash call is gone in the next unless it's written to a

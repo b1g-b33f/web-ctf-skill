@@ -17,7 +17,7 @@ Usage:
   # or feed candidates on stdin, one per line
   printf 'admin\\napi\\ngraphql\\n' | python3 quickrecon.py --base https://target --paths - --out recon
 
-Writes recon/fallback.headers + recon/fallback.body (the calibration response) and one
+Writes recon/fallback.txt (the calibration response) and one
 saved response per candidate under --out. Real hits are written to --hitfile (default:
 stdout only) as "status size content-type URL", one per line — the same shape probe.py
 uses, so the two tools read the same way.
@@ -44,12 +44,18 @@ HEADERS = {"User-Agent": UA, "Accept": "*/*"}
 # fixed-size fallback signature and need their own check.
 FRAMEWORK_404 = re.compile(
     r'Cannot (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /', re.I)
+ACTION_PATH = re.compile(
+    r'/(?:[^/?#]+/)*(?:recover|reset|verify|forgot|search|filter|query|graphql|login|register|signup)'
+    r'(?:[/?#-]|$)', re.I)
+GATEWAY_FAILURES = {502, 503, 504}
 
 
-def fetch(sess, url, timeout=15):
+def fetch(sess, url, method="GET", timeout=15):
     try:
-        return sess.get(url, headers=HEADERS, timeout=timeout,
-                         allow_redirects=False, verify=False)
+        kwargs = dict(headers=HEADERS, timeout=timeout, allow_redirects=False, verify=False)
+        if method in ("POST", "PUT", "PATCH"):
+            kwargs["json"] = {}
+        return sess.request(method, url, **kwargs)
     except Exception as e:
         return e
 
@@ -81,6 +87,17 @@ def save(out_dir, name, url, resp):
         fh.write(resp.text or "")
 
 
+def classify(resp, calibration):
+    """Return fallback/framework-404/HIT using a per-method calibration."""
+    if isinstance(resp, Exception):
+        return "ERR"
+    if signature(resp) == calibration:
+        return "fallback"
+    if FRAMEWORK_404.search((resp.text or "")[:400]):
+        return "framework-404"
+    return "HIT"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
@@ -88,6 +105,10 @@ def main():
                      help="candidate paths (leading / optional), or - to read stdin, one per line")
     ap.add_argument("--out", default="quickrecon_out")
     ap.add_argument("--hitfile", help="also append real hits to this file")
+    ap.add_argument("--discover-methods", action="store_true",
+                    help="for action-shaped GET misses, safely try OPTIONS then POST {}")
+    ap.add_argument("--methodfile",
+                    help="append discovered METHOD PATH entries, such as recon/methods.txt")
     ap.add_argument("--delay", type=float, default=0.05)
     a = ap.parse_args()
 
@@ -110,7 +131,16 @@ def main():
           (cal_sig[0], cal_sig[1], cal_sig[2][:12] if cal_sig[2] else ""))
     print("[*] (calibrated from %s, status ignored)\n" % (base + bogus))
 
-    hits = []
+    post_cal_sig = None
+    health_sig = signature(fetch(sess, base + "/"))
+    if a.discover_methods:
+        post_cal = fetch(sess, base + bogus, "POST")
+        save(a.out, "fallback_post", base + bogus, post_cal)
+        post_cal_sig = signature(post_cal)
+        print("[*] POST fallback signature: size=%s ctype=%s sha256=%s..." %
+              (post_cal_sig[0], post_cal_sig[1], post_cal_sig[2][:12] if post_cal_sig[2] else ""))
+
+    hits, discovered_methods = [], []
     for path in candidates:
         url = base + path
         resp = fetch(sess, url)
@@ -123,17 +153,54 @@ def main():
 
         sig = signature(resp)
         body_head = (resp.text or "")[:400]
-        if sig == cal_sig:
-            verdict = "fallback"
-        elif FRAMEWORK_404.search(body_head):
-            verdict = "framework-404"
-        else:
-            verdict = "HIT"
+        verdict = classify(resp, cal_sig)
 
         ctype = sig[1] or "-"
         print("%-8s %-46s %s %sB %s" % (resp.status_code, path, verdict, sig[0], ctype))
         if verdict == "HIT":
             hits.append("%s %s %s %s" % (resp.status_code, sig[0], ctype, url))
+            discovered_methods.append("GET    %s" % path)
+            continue
+
+        if not a.discover_methods or not ACTION_PATH.search(path):
+            continue
+
+        # Route-specific Allow is strong evidence. A broad CORS header is not.
+        allowed = []
+        try:
+            options = fetch(sess, url, "OPTIONS")
+            if not isinstance(options, Exception):
+                allowed = [m.strip().upper() for m in
+                           (options.headers.get("Allow") or "").split(",") if m.strip()]
+        except Exception:
+            allowed = []
+
+        methods_to_try = ["POST"] if not allowed else [m for m in allowed if m == "POST"]
+        for method in methods_to_try:
+            post_resp = fetch(sess, url, method)
+            time.sleep(a.delay)
+            save(a.out, "%s_%s" % (method.lower(), safe_name(path)), url, post_resp)
+            if isinstance(post_resp, Exception):
+                print("%-8s %-46s ERR method fallback: %s" % ("-", path, post_resp))
+                return 2
+            if post_resp.status_code == 429:
+                print("[!] 429 during method fallback; negative conclusions are invalid")
+                return 2
+            if post_resp.status_code in GATEWAY_FAILURES:
+                health_now = signature(fetch(sess, base + "/"))
+                changed = "changed" if health_now != health_sig else "unchanged"
+                print("[!] circuit breaker: %s %s returned %s; root health %s" %
+                      (method, path, post_resp.status_code, changed))
+                return 3
+            post_verdict = classify(post_resp, post_cal_sig)
+            post_sig = signature(post_resp)
+            print("%-8s %-46s %s %sB %s" %
+                  (post_resp.status_code, method + " " + path, post_verdict,
+                   post_sig[0], post_sig[1] or "-"))
+            if post_verdict == "HIT":
+                discovered_methods.append("%-6s %s" % (method, path))
+                hits.append("%s %s %s %s" %
+                            (post_resp.status_code, post_sig[0], post_sig[1] or "-", url))
 
     print("\n%d real hit(s) of %d candidate(s)" % (len(hits), len(candidates)))
     for h in hits:
@@ -143,6 +210,16 @@ def main():
         with open(a.hitfile, "a", encoding="utf-8") as fh:
             for h in hits:
                 fh.write(h + "\n")
+
+    if a.methodfile and discovered_methods:
+        existing = []
+        if os.path.isfile(a.methodfile):
+            with open(a.methodfile, encoding="utf-8") as fh:
+                existing = [line.rstrip() for line in fh if line.strip()]
+        merged = sorted(set(existing + discovered_methods))
+        with open(a.methodfile, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(merged) + "\n")
+        print("[*] %d unique method mapping(s) saved to %s" % (len(merged), a.methodfile))
 
     return 0
 

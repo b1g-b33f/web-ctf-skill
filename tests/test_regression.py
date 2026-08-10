@@ -131,6 +131,22 @@ class RegressionTest(unittest.TestCase):
             self.assertIn("/api/data", hits[0])
             self.assertTrue(hits[0].startswith("401 "), "expected the 401 status: %r" % hits[0])
 
+    def test_quickrecon_discovers_post_only_action_endpoint(self):
+        """GET /api/account/recover is the SPA fallback, while POST {} reaches
+        a validation error. Method fallback must preserve that route as POST."""
+        with tempfile.TemporaryDirectory() as tmp:
+            methodfile = os.path.join(tmp, "methods.txt")
+            proc = run_full(
+                "quickrecon.py", "--base", self.base_url,
+                "--out", os.path.join(tmp, "probe"), "--discover-methods",
+                "--methodfile", methodfile, "--delay", "0", "--paths",
+                "api/account/recover")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            with open(methodfile, encoding="utf-8") as fh:
+                methods = fh.read()
+            self.assertRegex(methods, r'POST\s+/api/account/recover',
+                             "POST-only action route was missed:\n" + proc.stdout)
+
     def test_jsharvest_extracts_methods_from_the_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = run("jsharvest.py", "--base", self.base_url, "--out", tmp)
@@ -167,6 +183,18 @@ class RegressionTest(unittest.TestCase):
             self.assertRegex(methods, r'POST\s+/api/auth/login',
                              "server-rendered form action was not mined:\n" + out)
 
+    def test_jsharvest_quarantines_dynamic_links_without_requesting_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = run("jsharvest.py", "--base", self.base_url, "--out", tmp,
+                      "--crawl-pages")
+            dynamic_path = os.path.join(tmp, "dynamic-links.txt")
+            with open(dynamic_path, encoding="utf-8") as fh:
+                dynamic = fh.read()
+            self.assertIn('/jobs/${job.id}/applicants', dynamic)
+            page_files = os.listdir(os.path.join(tmp, "pages"))
+            self.assertEqual(page_files, ["page-001.html"],
+                             "literal JS href was fetched as a page:\n" + out)
+
     def test_probe_classifies_public_error_and_auth_required_correctly(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths_file = os.path.join(tmp, "paths.txt")
@@ -200,6 +228,15 @@ class RegressionTest(unittest.TestCase):
             vendor_dir = os.path.join(tmp, "src", "node_modules")
             self.assertFalse(os.path.isdir(vendor_dir),
                               "vendor/node_modules sources must be excluded from extraction")
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "vendor", "socket.io.js")),
+                            "known vendor bundle was not quarantined")
+            with open(os.path.join(tmp, "source-provenance.tsv"), encoding="utf-8") as fh:
+                provenance = fh.read()
+            self.assertIn("source\tvendor", provenance)
+            self.assertIn("socket.io-client", provenance)
+            mined = run("jsmine.py", tmp)
+            self.assertNotIn("socket.io vendor admin comment", mined,
+                             "quarantined vendor source leaked back into application mining")
 
     def test_jsmine_surfaces_narrative_hint_text(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,6 +326,47 @@ class RegressionTest(unittest.TestCase):
                              "direct protected-leaf guess missing from quickcheck_hits.txt -- "
                              "recursive fuzzing alone cannot reach a leaf below an SPA-fallback "
                              "/api, so ctf-init.sh's quickcheck job must guess it directly")
+            self.assertNotIn("0\n0 hits", out,
+                             "empty grep count printed two zeroes instead of one")
+
+    def test_ctf_init_isolates_reprovisioned_instances_and_updates_current_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            challenge = "fixture-reprovision"
+            fake_bin = os.path.join(tmp, "bin")
+            os.makedirs(fake_bin)
+            ferox = os.path.join(fake_bin, "feroxbuster")
+            with open(ferox, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\nexit 0\n")
+            os.chmod(ferox, 0o755)
+            env = {**os.environ, "CTF_ROOT": tmp, "SECLISTS": tmp,
+                   "PATH": fake_bin + os.pathsep + os.environ.get("PATH", "")}
+            targets = [self.base_url, self.base_url + "/alternate-instance"]
+            outputs = []
+            for target in targets:
+                proc = subprocess.run(
+                    ["bash", os.path.join(SCRIPTS, "ctf-init.sh"), target,
+                     challenge, "bugforge"], capture_output=True, text=True,
+                    timeout=30, env=env)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                outputs.append(proc.stdout + proc.stderr)
+
+            workdir = os.path.join(tmp, challenge)
+            with open(os.path.join(workdir, "state", "current.json"), encoding="utf-8") as fh:
+                current = json.load(fh)
+            self.assertEqual(current["target"], targets[1])
+            self.assertTrue(os.path.islink(os.path.join(workdir, "current")))
+            instances = [name for name in os.listdir(os.path.join(workdir, "instances"))
+                         if os.path.isdir(os.path.join(workdir, "instances", name))]
+            self.assertEqual(len(instances), 2, instances)
+            with open(os.path.join(workdir, "WORKLOG.md"), encoding="utf-8") as fh:
+                worklog = fh.read()
+            self.assertIn("## Reprovisioned", worklog)
+            self.assertIn("**Previous target:** " + targets[0], worklog)
+            self.assertIn("**Current target:** " + targets[1], worklog)
+            expected_hook = os.path.join(workdir, "state", "flaghook-expected.txt")
+            self.assertTrue(os.path.isfile(expected_hook))
+            self.assertIn("Previous flag-hook sentinel was not observed", outputs[1])
+            self.assertIn("Next-call sentinel check", outputs[1])
 
 
 class JwtquickWordlistChainTest(unittest.TestCase):
@@ -607,8 +685,118 @@ class JsharvestReharvestTest(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(tmp, "app_2.js")))
             self.assertFalse(os.path.exists(os.path.join(tmp, "mapped_2.js")))
             self.assertFalse(os.path.exists(os.path.join(tmp, "mapped.js_2.map")))
-            self.assertIn("reused 3 identical asset(s)", second.stdout,
+            self.assertIn("reused 5 identical asset(s)", second.stdout,
                           second.stdout + second.stderr)
+
+
+class FurHireMethodExtractionTest(unittest.TestCase):
+    """Exact call shapes that produced 21 routes and zero methods on FurHire-014."""
+
+    def test_fetch_and_custom_wrapper_methods_are_balanced_and_probe_ready(self):
+        bundle = r'''
+async function apiRequest(url, options = {}) {
+  return fetch(url, {...options, headers: {...options.headers}});
+}
+window.FurHire = { apiRequest };
+FurHire.apiRequest('/api/profile');
+FurHire.apiRequest(`/api/jobs/${jobId}`, {
+  method: 'PUT',
+  body: JSON.stringify({nested: {value: 1}})
+});
+fetch('/api/account/recover', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify(data)
+});
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "furhire.js"), "w", encoding="utf-8") as fh:
+                fh.write(bundle)
+            proc = run_full("jsmine.py", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            section = re.search(r'=== METHOD -> PATH.*?(?=\n===|\Z)', proc.stdout, re.S)
+            self.assertIsNotNone(section, proc.stdout)
+            body = section.group(0)
+            self.assertIn("GET    /api/profile", body)
+            self.assertIn("PUT    /api/jobs/{...}", body)
+            self.assertIn("POST   /api/account/recover", body)
+            self.assertIn("HIGH-VALUE ACTION ROUTES", proc.stdout)
+            self.assertRegex(proc.stdout, r'score=100 POST\s+/api/account/recover')
+
+    def test_nonzero_routes_with_zero_methods_warns_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "route-only.js"), "w", encoding="utf-8") as fh:
+                fh.write('const recoveryPath = "/api/account/recover";')
+            out = run("jsmine.py", tmp)
+            self.assertIn("=== ROUTES (1) ===", out)
+            self.assertIn("=== METHOD -> PATH (0) ===", out)
+            self.assertIn("HIGH PRIORITY", out)
+
+
+class NosqlquickRegressionTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def base_args(self, endpoint="/api/account/recover"):
+        return [
+            "--url", self.base_url + endpoint,
+            "--field", "email", "--field", "backupCode",
+            "--baseline", "email=nobody@example.test",
+            "--baseline", "backupCode=invalid",
+            "--success-json", "status=verified", "--delay", "0",
+        ]
+
+    def test_paired_operator_probe_marks_single_guard_negatives_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full("nosqlquick.py", *self.base_args(), "--probe",
+                            "--map-query-shape", "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("CONFIRMED", proc.stdout)
+            self.assertIn("guard-blocked/unknown", proc.stdout)
+            self.assertIn("extra scalar field appears ignored", proc.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "probes.jsonl")))
+
+    def test_gt_identity_enumeration_is_monotonic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full("nosqlquick.py", *self.base_args(),
+                            "--enumerate", "email", "--identity-json", "email",
+                            "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("alpha@example.test", proc.stdout)
+            self.assertIn("whiskers@example.test", proc.stdout)
+            self.assertIn("enumerated 2 unique", proc.stdout)
+
+    def test_variable_length_printable_ascii_extraction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.base_args()
+            args += ["--lock", "email=whiskers@example.test",
+                     "--extract", "backupCode", "--max-length", "32", "--out", tmp]
+            proc = run_full("nosqlquick.py", *args, timeout=30)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("extracted backupCode = bug{aZ9}", proc.stdout)
+
+    def test_auth_and_password_fields_require_explicit_dangerous_opt_in(self):
+        proc = run_full(
+            "nosqlquick.py", "--url", self.base_url + "/api/login",
+            "--field", "username", "--field", "password", "--delay", "0")
+        self.assertEqual(proc.returncode, 4, proc.stdout + proc.stderr)
+        self.assertIn("SAFETY REFUSAL", proc.stderr)
+
+    def test_rate_limit_is_inconclusive_and_gateway_trips_circuit_breaker(self):
+        with tempfile.TemporaryDirectory() as rate_tmp, tempfile.TemporaryDirectory() as crash_tmp:
+            rate = run_full("nosqlquick.py", *self.base_args("/api/nosql-rate-limit"),
+                            "--out", rate_tmp)
+            self.assertEqual(rate.returncode, 2, rate.stdout + rate.stderr)
+            self.assertIn("INCONCLUSIVE", rate.stderr)
+            crash = run_full("nosqlquick.py", *self.base_args("/api/nosql-crash"),
+                             "--out", crash_tmp)
+            self.assertEqual(crash.returncode, 3, crash.stdout + crash.stderr)
+            self.assertIn("CIRCUIT BREAKER", crash.stderr)
 
 
 class FlaghookSyntheticDetectionTest(unittest.TestCase):

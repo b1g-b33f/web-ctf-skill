@@ -12,8 +12,11 @@ Run that command in a retained execution session and let the tool yield a sessio
 you continue with auth. Do not add `nohup` or shell `&`: command runners may terminate detached
 children when the parent call returns. `ctf-init.sh` already parallelizes its slow jobs internally.
 
-`ctf-init.sh` scaffolds the whole workspace itself — `recon/`, `exploits/`, `loot/`, and a
-`WORKLOG.md` stub in the challenge root — no separate `mkdir` needed. That stub means
+`ctf-init.sh` scaffolds the whole workspace itself. Each target is isolated under
+`instances/<hostname>/` with its own `recon/`, `exploits/`, `loot/`, and `auth/`; an atomic
+`current` pointer selects the active reprovision and fresh workspaces expose compatibility links
+such as `recon/`. The durable `WORKLOG.md` remains in the challenge root and receives an immutable
+target-change entry — no separate `mkdir` needed. That stub means
 `WORKLOG.md` already exists by the time you write to it: `Read` it first, or the edit tool
 will refuse the write as an unread file.
 
@@ -23,10 +26,11 @@ against it — see §2. Produces in `recon/`:
 | File(s) | From | What it is |
 |---|---|---|
 | `headers.txt`, `root.html` | root fetch | the unauthenticated root page and its response headers |
-| `<bundle>.js`/`.mjs`, `<bundle>.map` | `jsharvest.py` | every downloaded script bundle and, where advertised, its source map |
+| `<bundle>.js`/`.mjs`, `<bundle>.map`, `vendor/` | `jsharvest.py` | application bundles/maps; known vendor/runtime bundles are retained under `vendor/` and excluded from mining |
 | `jsmine.txt` | `jsharvest.py` → `jsmine.py` | the full mined-routes report over everything downloaded |
 | `methods.txt` | `jsharvest.py` | just the `METHOD -> PATH` lines, ready to pipe into `probe.py` |
-| `fallback.headers`, `fallback.body` | `quickrecon.py` | the calibration response the meta/quickcheck jobs compared everything against |
+| `dynamic-links.txt`, `source-provenance.tsv` | `jsharvest.py` | literal JS/template hrefs that were not requested, plus app/vendor source classification |
+| `fallback.txt`, `fallback_post.txt` | `quickrecon.py` | per-method calibration responses used by the meta/quickcheck jobs |
 | `meta_hits.txt`, `quickcheck_hits.txt` | `quickrecon.py` | real hits only, as `status size content-type URL`, including direct protected API-leaf guesses whose 401/403 existence oracle cannot be reached by recursive fuzzing; SPA fallback and framework-404s already suppressed |
 | `ferox.txt`, `ferox.log`, `nuclei.txt` | feroxbuster/nuclei | Results stay in `ferox.txt`; live progress/errors stay in `ferox.log` so retained sessions remain readable. Nuclei is skipped on BugForge, whose labs are anti-bot instrumented. |
 
@@ -56,8 +60,19 @@ python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out reco
 ```
 
 This safely GET-crawls same-origin HTML pages from the dashboard, mines rendered form actions
-as well as bundles, rejects non-2xx/error-page assets, and re-mines the full accumulated set. It overwrites
+as well as bundles, rejects non-2xx/error-page assets, and quarantines literal template/JS hrefs
+such as `/jobs/${job.id}` in `dynamic-links.txt` instead of requesting them. Known vendor bundles
+and package-namespace source maps (including Socket.IO maps without a `node_modules/` segment)
+remain available as raw evidence under `vendor/` but are excluded from application mining. It overwrites
 `jsmine.txt`/`methods.txt` with the union — nothing from the first pass is lost.
+
+`jsmine.py` recognizes native `fetch(url, {method: ...})` and request helpers whose definitions
+delegate to `fetch`/Axios, including qualified calls such as `FurHire.apiRequest(...)`. Its plain
+`METHOD -> PATH` section remains probe-ready; `METHOD PROVENANCE` and `HIGH-VALUE ACTION ROUTES`
+show where each method came from and rank recovery/reset/verify/search-style surfaces. If routes
+exist but zero methods map, both harvest tools raise a high-priority warning and `ctf-init.sh`
+runs action-shaped GET misses through route-specific `Allow` plus a calibrated `POST {}` fallback.
+Never interpret that invariant as “GET only.”
 
 **A component can "exist in the browser" and not exist on the server.** DevTools' Sources
 panel reconstructs a full original-file tree (`components/AdminPanel.js`, `Dashboard.js`, ...)
