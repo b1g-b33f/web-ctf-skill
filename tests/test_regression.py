@@ -654,6 +654,29 @@ class JwtquickBaselineRejectionTest(unittest.TestCase):
         self.assertNotIn("firing", proc.stdout,
                          "forged candidates must never fire against an unproven baseline")
 
+    def test_styled_denial_page_does_not_tag_every_forgery_as_a_flag(self):
+        """A refusing route that answers in styled HTML must still read as rejected.
+
+        jwtquick's flag pattern keeps a wildcard prefix on purpose, so a lab can
+        use a prefix this harness has never seen. With `[^}\\n]` as the payload,
+        though, any word followed by a braced block matched -- and a hit here is
+        unconditional success that overrides the rejected/bypass verdict. One
+        stylesheet in a block page therefore tagged every forgery FLAG and
+        reported a bypass that never happened.
+        """
+        token = make_jwt({"id": 1, "role": "user"}, "irrelevant")
+        proc = run_full("jwtquick.py", "--token", token, "--no-crack",
+                        "--base", self.base_url, "--test", "/api/jwt-styled-denial")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # The baseline denies, so candidates do fire -- and every one of them
+        # comes back to the same 403 block page.
+        self.assertIn("firing", proc.stdout)
+        self.assertIn("[rejected]", proc.stdout)
+        # The CSS still shows up in each line's body preview, which is correct;
+        # what must not appear is a flag verdict derived from it.
+        self.assertNotIn("FLAG", proc.stdout)
+        self.assertNotIn("POSSIBLE BYPASS", proc.stdout)
+
     def test_unreachable_baseline_is_inconclusive(self):
         # port 1 on loopback: nothing listens there, so this fails fast (ECONNREFUSED)
         # rather than waiting out jwtquick's own 20s request timeout

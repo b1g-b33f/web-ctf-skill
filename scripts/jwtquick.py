@@ -23,7 +23,15 @@ which one you want:
 """
 import argparse, base64, hashlib, hmac, json, os, re, sys, time
 
-FLAG = re.compile(r"\w+\{[^}\n]{4,}\}")
+# The wildcard prefix is deliberate -- a lab can use a flag prefix this harness
+# has never seen. The payload charset is not: with `[^}\n]` any word followed by
+# a brace matched, so `.form{margin:0}` and `body{background:#fff}` in an ordinary
+# styled error page both read as flags. That is not merely noisy here, because a
+# hit below is unconditional success and overrides the rejected/bypass verdict --
+# one stylesheet in a refusing route's HTML would tag every forgery FLAG. This is
+# flaghook.py's proven flag-body charset, which no CSS or JS block satisfies
+# (`:` and `;` are absent) while every real flag payload does.
+FLAG = re.compile(r"\w+\{[A-Za-z0-9_\-!?.@#$%^&*+=/]{4,120}\}")
 SECLISTS = os.environ.get("SECLISTS", "/opt/security-tools/SecLists")
 DEFAULT_WL = SECLISTS.rstrip("/") + "/Passwords/scraped-JWT-secrets.txt"
 ROCKYOU = os.environ.get("ROCKYOU", SECLISTS.rstrip("/") + "/Passwords/Leaked-Databases/rockyou.txt")

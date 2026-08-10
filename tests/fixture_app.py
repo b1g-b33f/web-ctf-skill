@@ -66,6 +66,17 @@ FORGOT_PASSWORD_PUBLIC = b'{"message":"If that email exists, a reset link was se
 FORGOT_PASSWORD_LEAK = (b'{"message":"If that email exists, a reset link was sent.",'
                         b'"reset_token":"leaked-secret-value"}')
 STOCKS_SEARCH_401 = b'{"error":"access token required"}'
+# A refusing route that answers in styled HTML rather than JSON -- the ordinary
+# shape of a gateway/WAF block page. The CSS here is the point: every rule is a
+# word followed by a braced block, which a wildcard-prefix flag pattern reads as
+# a flag.
+STYLED_DENIAL_HTML = (
+    b'<html><head><style>'
+    b'body{background:#fff;font-family:sans-serif}'
+    b'.form{margin:0;padding:0}'
+    b'div.card{box-shadow:0 1px 2px}'
+    b'</style></head><body><h1>403 Forbidden</h1>'
+    b'<p>You do not have permission to access this resource.</p></body></html>')
 CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE"
 GRAPHQL_FLAG = "bug" + "{GraphqlQuickRegression123}"
 
@@ -154,6 +165,8 @@ class Handler(BaseHTTPRequestHandler):
             return 200, "application/json", FORGOT_PASSWORD_PUBLIC
         if path == "/api/stocks/search":
             return 401, "application/json", STOCKS_SEARCH_401
+        if path == "/api/jwt-styled-denial":
+            return 403, "text/html", STYLED_DENIAL_HTML
         if path == "/api/graphql" and self.command == "POST":
             if not self.headers.get("Authorization"):
                 return 401, "application/json", b'{"error":"access token required"}'
