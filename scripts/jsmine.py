@@ -267,8 +267,37 @@ def extract_method_lines(js, wrapper_names):
     return call_lines + template_lines + concat_lines + forms + generic_request_lines(js, wrapper_names)
 
 
+# The name is optional: `query { ... }` is a valid anonymous operation and is
+# common in hand-written clients. The name must still be whitespace-separated
+# from the keyword, or minified `document.querySelector(...)` splits into the
+# keyword `query` plus the name `Selector` and mines as an operation.
+# Groups: keyword, name, args.
 GRAPHQL_START = re.compile(
-    r'\b(query|mutation|subscription)\s+([A-Za-z_]\w*)\s*(\([^{}]{0,1000}\))?\s*\{')
+    r'\b(query|mutation|subscription)(?:[ \t\r\n]+([A-Za-z_]\w*))?[ \t\r\n]*'
+    r'(\([^{}]{0,1000}\))?[ \t\r\n]*\{')
+# `gql`{ viewer { id } }`` — shorthand has no keyword at all, so only trust it
+# inside a GraphQL template tag. A bare `{` anywhere else is just JavaScript.
+GRAPHQL_TAG_SHORTHAND = re.compile(r'\b(?:gql|graphql)\s*`\s*\{')
+# GraphQL selection sets contain none of these; JS bodies almost always do. Used
+# only to vet anonymous matches, where the keyword alone is weak evidence.
+JS_BODY_MARKER = re.compile(r'=>|;|&&|\|\||`|\+\+|\breturn\b|\bfunction\b|\bvar\b')
+
+
+def anonymous_match_is_graphql(args, body):
+    """Vet a nameless ``query|mutation|subscription`` match against JS lookalikes.
+
+    ``function query() {`` and ``async query(a, b) {`` are ordinary JavaScript
+    that the nameless pattern would otherwise mine. Two cheap discriminators:
+    a GraphQL variable list always opens with ``$``, and a selection set never
+    contains JS statement syntax.
+    """
+    if args and not re.match(r'\(\s*\$', args):
+        # `query(selector) {` is a function, not an operation. A nameless
+        # GraphQL operation that takes arguments always declares `$vars` --
+        # and requiring `$` *first* also rejects a minified span that merely
+        # happens to contain one further along.
+        return False
+    return not JS_BODY_MARKER.search(body)
 
 
 def graphql_comment_end(text, index):
@@ -327,12 +356,20 @@ def extract_graphql_operations(js):
     The old one-line regex stopped at the opening brace, hiding the root resolver,
     selection fields, and identity-shaped variables that make an IDOR lead valuable.
     Keep this parser intentionally GraphQL-shaped rather than trying to parse all JS:
-    start at a named operation, then balance braces while skipping GraphQL strings
-    and ``#`` comments.
+    start at an operation, then balance braces while skipping GraphQL strings and
+    ``#`` comments. Named operations are trusted on sight; nameless ones are vetted
+    against JS lookalikes first, and bare shorthand only inside a gql`` tag.
     """
+    starts = [(match.start(), match.group(1), match.group(2), match.group(3),
+               js.find("{", match.start(), match.end()))
+              for match in GRAPHQL_START.finditer(js)]
+    # Shorthand carries no keyword, so it is only mined inside a gql`` tag and is
+    # a query by definition.
+    starts += [(match.end() - 1, "query", None, None, match.end() - 1)
+               for match in GRAPHQL_TAG_SHORTHAND.finditer(js)]
+
     operations = []
-    for match in GRAPHQL_START.finditer(js):
-        brace = js.find("{", match.start(), match.end())
+    for start, keyword, name, args, brace in sorted(starts):
         depth = 0
         end = None
         for index, char in scan_graphql(js, brace, brace + 20000):
@@ -345,7 +382,10 @@ def extract_graphql_operations(js):
                     break
         if end is None:
             continue
-        raw = js[match.start():end]
+        if not name and not anonymous_match_is_graphql(
+                args, strip_graphql_comments(js[brace:end])):
+            continue
+        raw = js[start:end]
         # A minified JS string carries GraphQL newlines as the two characters
         # ``\\n``, while sourcesContent carries real newlines. Normalize both so
         # the bundle and its source map collapse to one operation/provenance row.
@@ -362,8 +402,8 @@ def extract_graphql_operations(js):
             r'\s*(?:[A-Za-z_]\w*\s*:\s*)?([A-Za-z_]\w*)', body)
         roots = [root_match.group(1)] if root_match else []
         operations.append({
-            "type": match.group(1),
-            "name": match.group(2),
+            "type": keyword,
+            "name": name or "(anonymous)",
             "variables": variables,
             "identity_variables": identity_variables,
             "roots": roots,
@@ -563,7 +603,7 @@ def main():
     section("HINT TEXT (narrative strings, not code)", hints, limit=60)
 
     # ---- flags already present ---------------------------------------------
-    hits = re.findall(r'(?:HTB|bug|flag|CTF|THM|picoCTF)\{[^}]{4,80}\}', all_js, re.I)
+    hits = re.findall(r'(?<![A-Za-z0-9])(?:HTB|bug|flag|CTF|THM|picoCTF)\{[^}]{4,80}\}', all_js, re.I)
     if hits:
         print("\n" + "!" * 60)
         print("FLAG PATTERN IN BUNDLE: %s" % set(hits))

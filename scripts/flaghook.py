@@ -20,7 +20,7 @@ import sys
 # Deliberately specific: platform-prefixed braces only. A bare {...} would fire
 # on every JS object in a bundle.
 FLAG_RE = re.compile(
-    r'(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[A-Za-z0-9_\-!?.@#$%^&*+=/]{3,90}\}')
+    r'(?<![A-Za-z0-9])(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[A-Za-z0-9_\-!?.@#$%^&*+=/]{3,90}\}')
 HOOK_CHECK_RE = re.compile(r'bug\{CodexHarnessHookCheck_[A-Za-z0-9_-]{4,40}\}')
 
 # Don't fire on our own log line, on regex literals we ship, or on placeholders.

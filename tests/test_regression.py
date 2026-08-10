@@ -802,6 +802,53 @@ const STRING_ARG = `query StringArg($q: String!) { search(filter: "{\"role\":\"a
             self.assertIn('filter: "{\\"role\\":\\"admin\\"}"', proc.stdout)
             self.assertIn("# it's the first", proc.stdout)
 
+    def test_anonymous_operations_mine_without_javascript_false_positives(self):
+        """`query { ... }` is a valid operation and common in hand-written clients.
+
+        Mining nameless operations means the keyword alone is the only signal, and
+        `function query() {` / `async query(a, b) {` are ordinary JavaScript that
+        would otherwise be mined as GraphQL. Two discriminators keep it honest: a
+        nameless operation taking arguments always declares `$vars`, and a
+        selection set never contains JS statement syntax. Bare shorthand carries
+        no keyword at all, so it is only trusted inside a gql`` tag.
+
+        The minified querySelector lines are the case a live React bundle caught
+        and the hand-written ones missed: with the name allowed to sit flush
+        against the keyword, `document.querySelectorAll(x)` splits into the
+        keyword `query` plus the name `Selector`, and the argument pattern then
+        spans hundreds of non-brace characters to reach an unrelated `{`.
+        """
+        bundle = '''
+const A = `query { users { id email role } }`;
+const B = `mutation { deleteUser(id: 3) { ok } }`;
+const C = `query ($userId: ID!) { user(id: $userId) { apiKey } }`;
+const D = gql`{ viewer { id token } }`;
+var E = "query{account{balance}}";
+function query() { return 1; }
+const obj = { query (selector) { return document.querySelector(selector); } };
+class Repo { query(a, b) { return this.db.find(a, b); } }
+if (query) { doThing(); }
+const mutation = { type: 'noop' };
+api.query({ limit: 10 });
+var t=document.querySelector("head");if(!e)return;const u=e.firstChild;if(o){var r;if(u&&null!=(r=u.hasAttribute)){K(r),J(r,o)}}
+var w=n.querySelectorAll('style[data-emotion^="'+t+' "]'),function(e){for(var t=e.getAttribute("data-emotion").split(" "),n=1;n<t.length;n++)l[t[n]]=!0}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "anon.js"), "w", encoding="utf-8") as fh:
+                fh.write(bundle)
+            proc = run_full("jsmine.py", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            # Exactly the five real operations, and none of the six JS lookalikes.
+            self.assertIn("=== GRAPHQL OPERATIONS (5) ===", proc.stdout)
+            for root in ("users", "deleteUser", "user", "viewer", "account"):
+                self.assertIn("roots=%s" % root, proc.stdout)
+            self.assertIn("query (anonymous)", proc.stdout)
+            self.assertIn("mutation (anonymous)", proc.stdout)
+            self.assertIn("identity-vars=userId", proc.stdout)
+            for lookalike in ("querySelector", "this.db.find", "doThing",
+                              "query Selector", "data-emotion"):
+                self.assertNotIn(lookalike, proc.stdout)
+
 
 class GraphqlquickRegressionTest(unittest.TestCase):
     @classmethod
@@ -834,6 +881,21 @@ class GraphqlquickRegressionTest(unittest.TestCase):
                             "generic GraphQL fast track must remain read-only")
             self.assertTrue(any("user(id: 1) { password }" in record["query"]
                                 for record in records))
+
+    def test_malformed_header_reads_as_an_argument_error_not_a_safety_refusal(self):
+        """SAFETY REFUSAL is reserved for the mutation guard.
+
+        Both faults exit 4, but mid-engagement the label is the whole message:
+        a typo'd --header reporting a safety refusal reads as the harness
+        declining to send something, which is a different and alarming claim.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "graphqlquick.py", "--url", self.base_url + "/api/graphql",
+                "--header", "X-Broken", "--out", tmp)
+            self.assertEqual(proc.returncode, 4, proc.stdout + proc.stderr)
+            self.assertIn("INVALID ARGUMENT", proc.stderr)
+            self.assertNotIn("SAFETY REFUSAL", proc.stderr)
 
     def test_probe_budget_is_a_clean_bounded_stop(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -930,6 +992,46 @@ class FlaghookSyntheticDetectionTest(unittest.TestCase):
             self.assertTrue(os.path.isfile(log), "flaghook did not create ctf-flags.log")
             with open(log, encoding="utf-8") as fh:
                 self.assertIn(marker, fh.read())
+
+
+class FlagPatternAnchorTest(unittest.TestCase):
+    """The shared flag pattern must not fire mid-word.
+
+    `bug` and `RM` are prefixes in the alternation, and unanchored they match
+    inside ordinary markup: `.form{margin:0}` contains `rm{...}` and
+    `.debug{...}` contains `bug{...}`. Every probing script treats a flag hit as
+    a terminal success -- it prints FLAG and stops -- so a stylesheet in a WAF
+    block page could end a run with a wrong answer. A left boundary is the cheap
+    fix; a separator that is not alphanumeric (`"`, `_`, `>`, space) still
+    matches, so real flags are unaffected.
+    """
+
+    def _mine(self, blob):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "styles.js"), "w", encoding="utf-8") as fh:
+                fh.write(blob)
+            proc = run_full("jsmine.py", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            return proc.stdout
+
+    def test_css_lookalikes_do_not_register_as_flags(self):
+        # Every one of these contains `rm{...}` or `bug{...}` as a substring, and
+        # the scanning scripts accept any non-brace payload between the braces.
+        for blob in ('const s = ".form{margin:0;padding:0}";',
+                     'el.innerHTML = "<style>form{border:0;outline:0}</style>";',
+                     'const d = "a.debug{color:red;font-weight:bold}";',
+                     'const p = ".subform{display:none;opacity:0}";'):
+            self.assertNotIn("FLAG PATTERN IN BUNDLE", self._mine(blob),
+                             "%r was treated as a flag" % blob)
+
+    def test_real_flags_still_detected_next_to_any_separator(self):
+        marker = "bug" + "{AnchorRegressionCheck123}"
+        for blob in (marker, '{"password":"%s"}' % marker, "user_%s" % marker,
+                     "X-Flag: %s" % marker, ">%s<" % marker):
+            out = self._mine("const leaked = %r;" % blob)
+            self.assertIn("FLAG PATTERN IN BUNDLE", out,
+                          "%r was not detected as a flag" % blob)
+            self.assertIn(marker, out)
 
 
 class FlaghookHealthMarkerTest(unittest.TestCase):

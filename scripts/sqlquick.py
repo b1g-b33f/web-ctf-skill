@@ -40,7 +40,7 @@ import requests
 
 requests.packages.urllib3.disable_warnings()
 
-FLAG_RE = re.compile(r'(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[^}]{3,90}\}', re.I)
+FLAG_RE = re.compile(r'(?<![A-Za-z0-9])(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[^}]{3,90}\}', re.I)
 DBERR_RE = re.compile(
     r'sqlite3\.|SQLITE_ERROR|unrecognized token|near ".*"\s*:\s*syntax error|'
     r'sql syntax|ORA-\d{4,5}|pg_query|syntax error at or near|'

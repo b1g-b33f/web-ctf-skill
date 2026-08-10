@@ -23,7 +23,7 @@ requests.packages.urllib3.disable_warnings()
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 FLAG_RE = re.compile(
-    r'(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[^}]{3,120}\}', re.I)
+    r'(?<![A-Za-z0-9])(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[^}]{3,120}\}', re.I)
 GATEWAY_FAILURES = {502, 503, 504}
 ROOT_CANDIDATES = (
     "user", "users", "me", "viewer", "currentUser", "profile", "account",
@@ -60,6 +60,10 @@ class CircuitBreak(RuntimeError):
 
 class BudgetExhausted(RuntimeError):
     pass
+
+
+class SafetyRefusal(RuntimeError):
+    """The harness declined to send something, as opposed to being misconfigured."""
 
 
 def unique(items):
@@ -181,7 +185,7 @@ class FastTrack:
         if self.count >= self.args.max_probes:
             raise BudgetExhausted("probe budget reached (%d)" % self.args.max_probes)
         if re.search(r'\bmutation\b', query, re.I):
-            raise ValueError("graphqlquick refuses mutation operations")
+            raise SafetyRefusal("graphqlquick refuses mutation operations")
         self.seen_queries.add(key)
         if self.count:
             time.sleep(self.args.delay)
@@ -338,8 +342,11 @@ def main():
         label = "CIRCUIT BREAKER" if isinstance(exc, CircuitBreak) else "BOUNDED STOP"
         print("%s: %s" % (label, exc), file=sys.stderr)
         return 3 if isinstance(exc, CircuitBreak) else 0
-    except ValueError as exc:
+    except SafetyRefusal as exc:
         print("SAFETY REFUSAL: %s" % exc, file=sys.stderr)
+        return 4
+    except ValueError as exc:
+        print("INVALID ARGUMENT: %s" % exc, file=sys.stderr)
         return 4
     print("[*] completed %d read-only probe(s); no flag found" % tracker.count)
     return 0

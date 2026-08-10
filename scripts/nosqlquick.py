@@ -44,7 +44,7 @@ requests.packages.urllib3.disable_warnings()
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 FLAG_RE = re.compile(
-    r'(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[^}]{3,120}\}', re.I)
+    r'(?<![A-Za-z0-9])(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[^}]{3,120}\}', re.I)
 AUTH_PATH = re.compile(r'/(?:api/)?(?:auth/)?(?:login|register|signup|sign-in|session)(?:/|$)', re.I)
 DANGEROUS_FIELD = re.compile(r'(?:^|[_-])(?:password|passwd|passphrase|credential)(?:$|[_-])', re.I)
 GATEWAY_FAILURES = {502, 503, 504}

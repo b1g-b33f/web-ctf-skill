@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 CTF_ROOT = os.environ.get("CTF_ROOT", os.path.expanduser("~/Offsec/Web_CTF/CTF"))
 CF = os.environ.get("CLOUDFLARED", "cloudflared")
 NGROK = os.environ.get("NGROK", "ngrok")
-FLAG = re.compile(r"(?:HTB|bug|flag|CTF)\{[^}]{4,120}\}", re.I)
+FLAG = re.compile(r"(?<![A-Za-z0-9])(?:HTB|bug|flag|CTF)\{[^}]{4,120}\}", re.I)
 GIF = (b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
        b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;")
 

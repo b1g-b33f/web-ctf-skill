@@ -33,7 +33,7 @@ import requests
 
 requests.packages.urllib3.disable_warnings()
 
-FLAG_RE = re.compile(r'(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[^}]{3,90}\}', re.I)
+FLAG_RE = re.compile(r'(?<![A-Za-z0-9])(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[^}]{3,90}\}', re.I)
 
 # Ports worth trying on loopback. The app's own port is deliberately included --
 # an internal admin API often lives on the SAME port behind a 403, so "only the
