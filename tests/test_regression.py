@@ -627,6 +627,161 @@ class ProbePublicAuthEnvelopeTest(unittest.TestCase):
             self.assertNotIn("public-endpoint — expected without auth", proc.stdout)
 
 
+class ProbePrivilegeGapTest(unittest.TestCase):
+    """Authenticated-vs-anonymous is only two of the three identities that matter.
+
+    From Ottergram (BugForge), where admin creds were handed over at the start:
+    every route under /api/admin enforced the role except DELETE /api/admin/posts/:id,
+    which only checked that a token existed. As admin that DELETE succeeding is correct
+    behaviour; anonymously it 401s. Both of probe.py's original identities therefore saw
+    a healthy route, and the flag sat in the response body of a request the harness had
+    no reason to send. A second, low-privilege account is what separates them.
+
+    Two independent detectors, because each covers the other's blind spot: the route
+    name (/admin/...) needs no peers, and peer inconsistency inside a route group needs
+    no recognisable name."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    ADMIN_PATHS = ("GET /api/admin\n"
+                   "GET /api/admin/flagged-posts\n"
+                   "POST /api/admin/posts/1/approve\n"
+                   "DELETE /api/admin/posts/1\n")
+
+    def _run(self, tmp, paths_text, *extra):
+        paths = os.path.join(tmp, "paths.txt")
+        with open(paths, "w", encoding="utf-8") as fh:
+            fh.write(paths_text)
+        return run_full("probe.py", "--base", self.base_url, "--token", "admin-token",
+                        "--paths", paths, "--write", "--out", os.path.join(tmp, "out"),
+                        *extra)
+
+    def test_lowpriv_identity_exposes_the_missing_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run(tmp, self.ADMIN_PATHS, "--lowpriv-token", "user-token")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("PRIVILEGE GAP: DELETE /api/admin/posts/1", proc.stdout)
+            self.assertIn("privilege gaps: 1", proc.stdout)
+            # The three guarded siblings must not be reported.
+            for guarded in ("/api/admin/flagged-posts", "/api/admin/posts/1/approve"):
+                self.assertNotIn("PRIVILEGE GAP: %s" % guarded, proc.stdout,
+                                 "a route that refuses the low-priv identity is not a gap")
+
+    def test_auth_versus_anonymous_alone_is_blind_to_it(self):
+        """The regression this whole feature exists for: without the second identity
+        the same run over the same routes reports nothing wrong."""
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run(tmp, self.ADMIN_PATHS)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertNotIn("PRIVILEGE GAP", proc.stdout)
+            self.assertNotIn("NO-AUTH", proc.stdout.split("real routes:")[-1])
+
+    def test_flag_in_the_lowpriv_response_is_scanned_and_saved(self):
+        """The flag existed only in the low-priv response body. If that identity's
+        responses aren't scanned and written to disk like the other two, the harness
+        sends the winning request and throws the answer away."""
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run(tmp, "DELETE /api/admin/posts/1\n",
+                             "--lowpriv-token", "user-token")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(fixture_app.BFLA_FLAG, proc.stdout)
+            self.assertIn("(lowpriv)", proc.stdout,
+                          "the flag must be attributed to the identity that earned it")
+            saved = os.path.join(tmp, "out", "delete.api_admin_posts_1.lowpriv.txt")
+            self.assertTrue(os.path.isfile(saved), os.listdir(os.path.join(tmp, "out")))
+            with open(saved, encoding="utf-8") as fh:
+                self.assertIn(fixture_app.BFLA_FLAG, fh.read())
+
+    def test_peer_inconsistency_finds_a_group_with_no_privileged_name(self):
+        """/api/reports says nothing about privilege. Two siblings deny the low-priv
+        identity and one does not — that inconsistency is the entire signal."""
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run(tmp,
+                             "POST /api/reports/1/resolve\n"
+                             "POST /api/reports/1/escalate\n"
+                             "DELETE /api/reports/1\n",
+                             "--lowpriv-token", "user-token")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("PRIVILEGE GAP: DELETE /api/reports/1", proc.stdout)
+            self.assertIn("sibling route(s) under /api/reports", proc.stdout)
+
+    def test_ordinary_authenticated_group_is_not_a_gap(self):
+        """Every identity may use /api/feed. Reporting that would make the verdict
+        worthless on any app with a public feed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run(tmp, "GET /api/feed\nGET /api/feed/1\n",
+                             "--lowpriv-token", "user-token")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertNotIn("PRIVILEGE GAP", proc.stdout)
+            self.assertIn("no route treated the low-priv identity as privileged", proc.stdout)
+
+    def test_write_verb_tests_lowpriv_before_the_object_is_consumed(self):
+        """Found by running this feature against the live target, not by unit test.
+
+        A DELETE is consumed by whichever identity fires it first. Probing privileged-
+        first reported "admin 200, low-priv 404" on the real Ottergram box — a false
+        negative on the very bug the feature exists to find, because the low-priv
+        request landed on an object that no longer existed. The low-priv identity must
+        go first on write verbs, and the now-stale privileged result must be labelled
+        inconclusive rather than counted as a clean negative."""
+        fixture_app.DELETED_POSTS.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run(tmp, "DELETE /api/admin/posts/2\n",
+                             "--lowpriv-token", "user-token")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("PRIVILEGE GAP: DELETE /api/admin/posts/2", proc.stdout,
+                          "privileged-first ordering would have hidden this behind a 404")
+            self.assertIn(fixture_app.BFLA_FLAG, proc.stdout)
+            self.assertIn("INCONCLUSIVE", proc.stdout)
+            self.assertIn("already consumed this object", proc.stdout)
+
+    def test_skipped_write_on_a_privileged_route_says_so(self):
+        """Without --write the winning request is never sent. The skip notice has to
+        name that risk, not just list what it held back."""
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = os.path.join(tmp, "paths.txt")
+            with open(paths, "w", encoding="utf-8") as fh:
+                fh.write("GET /api/admin\nDELETE /api/admin/posts/1\n")
+            proc = run_full("probe.py", "--base", self.base_url, "--token", "admin-token",
+                            "--lowpriv-token", "user-token", "--paths", paths,
+                            "--out", os.path.join(tmp, "out"))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing function-level guards", proc.stdout)
+            self.assertIn("Rerun with --write", proc.stdout)
+
+
+class FlaghookReportsBeforeVerifyingTest(unittest.TestCase):
+    """A flag the user cannot see yet is worth nothing on a timed scoreboard.
+
+    The hook blocks the turn (exit 2), so whatever it says first is what happens first.
+    It used to lead with "verify it before submitting", which cost a full round trip
+    before the flag was ever shown. Verification still has to happen — labs serve
+    decoys — it just must not gate the reveal."""
+
+    def _fire(self, flag):
+        return run_full("flaghook.py", input_text=json.dumps({"output": flag}))
+
+    def test_hook_orders_reporting_ahead_of_verification(self):
+        flag = "bug" + "{OrderingRegression_%s}" % os.urandom(4).hex()
+        proc = self._fire(flag)
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        msg = proc.stderr
+        self.assertIn(flag, msg)
+        report_at = msg.upper().find("REPORT THIS FLAG TO THE USER")
+        verify_at = msg.lower().find("verify it against a fresh")
+        self.assertGreater(report_at, -1, "the hook must tell the agent to report the flag")
+        self.assertGreater(verify_at, -1, "verification guidance must survive the reorder")
+        self.assertLess(report_at, verify_at,
+                        "reporting must be instructed before verification, not after")
+        self.assertIn("before any further tool calls", msg)
+
+
 class JwtquickBaselineRejectionTest(unittest.TestCase):
     """--test must point at a route that actually denies the caller's own token before
     any forged candidate is fired. Firing candidates against a baseline that never

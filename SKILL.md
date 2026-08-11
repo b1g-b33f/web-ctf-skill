@@ -59,6 +59,10 @@ Two rules that repeatedly decide solves:
    match as a hypothesis. One initial `find`, then move on
    → `references/vault-index.md`
 3. **Get an account** — login with given creds, else open registration → `references/auth-jwt.md`
+   **Given privileged creds? Register a throwaway account too, in the same burst.** Handing you
+   `admin:admin` makes auth-vs-anonymous the wrong axis — as admin the vulnerable call succeeds
+   (correct behaviour) and anonymously it 401s, so neither identity shows a thing. The creds exist
+   to show you which functions to re-run as a nobody → `references/access-control.md` §C
    **Hold a JWT? Run `jwtquick.py` foreground — ~1s, not a background job.** Crack + alg:none
    + forge + fire at a refusing route, one call. Never defer it → `references/auth-jwt.md` §2
    If recon already mapped GraphQL, run `graphqlquick.py` in the same authenticated parallel burst;
@@ -73,7 +77,8 @@ Two rules that repeatedly decide solves:
    else** is the target object, free.
 5. **Harvest JS again, authenticated** — apps sometimes bootstrap differently post-login; re-run
    `jsharvest.py` with `$AUTH_HEADER` now → `references/web-recon.md`
-6. **Probe every endpoint** — with auth *and* without auth, save every response to disk
+6. **Probe every endpoint** — with auth, *without* auth, and as the throwaway low-priv account
+   if you hold privileged creds; save every response to disk
 7. **Route to an exploit reference** — see the signal table below
 8. **Fuzz** — only after 5–7 are exhausted → `references/web-recon.md`
 9. **Loop gate** — status table, pick the strongest untested vector, keep going
@@ -103,7 +108,7 @@ side) and burned half the solve, while the one URL-taking endpoint was the answe
 | Observed signal | Read |
 |---|---|
 | JWT in response; session cookie; reset/forgot-password flow; login oracle | `references/auth-jwt.md` |
-| Numeric/UUID ids in responses; `role`/`isAdmin`/`permissions` fields; 401/403 endpoints | `references/access-control.md` |
+| Numeric/UUID ids in responses; `role`/`isAdmin`/`permissions` fields; 401/403 endpoints; **privileged creds handed to you**; an admin panel whose buttons fire write verbs | `references/access-control.md` |
 | Search/filter/id param; DB error on odd input; Mongo/mongoose in use | `references/injection.md` |
 | Input echoed back into a rendered page or document | `references/ssti.md` |
 | Filename or path parameter; file upload accepting a filename | `references/traversal-upload.md` |
@@ -189,6 +194,12 @@ python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out reco
 # so status-code jitter can't hide real routes; scans headers + bodies for flags
 python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt
 
+# three identities at once. Register a throwaway account and pass it as --lowpriv-token
+# whenever you hold privileged creds: a route the low-priv account reaches that its
+# siblings refuse is a missing function-level guard → references/access-control.md §C
+python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> \
+  --token "$TOKEN" --lowpriv-token "$LOWPRIV_TOKEN" --write --paths paths.txt
+
 # chain them — pipe the METHOD -> PATH section so POST routes are probed as POST
 python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
   | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
@@ -219,15 +230,16 @@ grep -a 'HIT\|FLAG' ~/Offsec/Web_CTF/CTF/<challenge-name>/oob.log
 `probe.py` verdicts: `not-a-route` (calibrated fallback body, per method, or a framework 404),
 `auth-required` (401/403, or identical denial with and without a token), `public-error` (identical
 non-fallback error on a status *other* than 401/403 — a real route, but not a leak),
-`public-endpoint` (a generic login/register/reset envelope expected before authentication), and
-`NO-AUTH LEAK` / `NO-AUTH DATA` — broken access control, found deliberately rather than by accident.
-With `--methods`, `Allow` is route-specific; `CORS policy` is only the server's advertised
-cross-origin verb policy and does not prove that handlers exist for those verbs.
+`public-endpoint` (a generic login/register/reset envelope expected before authentication),
+`NO-AUTH LEAK` / `NO-AUTH DATA` — broken access control, found deliberately rather than by accident —
+and, with `--lowpriv-token`, `PRIVILEGE GAP` (a second authenticated identity reached a route its
+siblings refuse it). With `--methods`, `Allow` is route-specific; `CORS policy` is only the server's
+advertised cross-origin verb policy and does not prove that handlers exist for those verbs.
 
 `jwtquick.py` tags each candidate `rejected` (still denies — a reworded message is not progress),
 `POSSIBLE BYPASS` (the baseline denial is gone), or `FLAG` (unconditional success, any status).
 
-**Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write`.
+**Always feed probe.py the METHOD → PATH section.** Probing a POST-only route with GET returns the SPA's index.html, which matches the 404 calibration exactly and reports `not-a-route` — that's how a GET-only probe would have hidden `POST /api/profile/avatar/import`, the entire CafeClub solve. `PUT`/`PATCH`/`DELETE` are skipped unless you pass `--write` — **always pass it on an `/admin/` prefix**, because the guard a developer forgets is on the verb behind a button, not the one they visit in a browser (Ottergram: `DELETE /api/admin/posts/:id` was the only unguarded route in its group).
 
 **Routes > 0 with methods = 0 is a harness alarm, not an empty result.** `jsmine.py` and
 `jsharvest.py` warn on that invariant; `ctf-init.sh` then runs action-shaped routes through

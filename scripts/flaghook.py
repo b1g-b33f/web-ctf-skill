@@ -91,10 +91,17 @@ def main():
     if not fresh:
         return 0
 
+    # Order matters. This text used to lead with "verify before submitting", which
+    # reads as "verify before doing anything" -- and because exit 2 blocks the turn,
+    # the flag stayed invisible to the user for a whole extra round trip. CTFs are
+    # scored on speed: print first, verify second. Verification is not optional,
+    # it just stops gating the reveal.
     sys.stderr.write(
         "FLAG PATTERN DETECTED in tool output: %s\n"
-        "Verify it against a fresh independent request before submitting "
-        "(labs serve decoy flags), then record it and stop working the surface.\n"
+        "REPORT THIS FLAG TO THE USER IN YOUR NEXT MESSAGE, before any further tool "
+        "calls -- CTF scoring is timed and the user needs it the moment it exists.\n"
+        "Then verify it against a fresh independent request (labs serve decoy flags), "
+        "record it, and stop working the surface.\n"
         % ", ".join(fresh))
     return 2
 

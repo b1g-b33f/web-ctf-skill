@@ -32,6 +32,49 @@ curl -si -X PATCH <target>/api/user/<your-id> $AUTH_HEADER \
 
 After each attempt, **re-fetch your profile to confirm the field actually changed** (a 200 does not mean the write landed) and re-probe every previously-403'd endpoint.
 
+## C. BFLA — the guard that was never mounted on one verb
+
+Section G below defeats a guard that *exists*. This is the other case: a route where
+nobody put one. Same path prefix, same app, one verb missing its middleware.
+
+**You cannot see this with your own account.** Register a second, unprivileged user and
+re-run every privileged route as that user:
+
+```bash
+LOW=$(curl -s -X POST <target>/api/register -H 'Content-Type: application/json' \
+  -d '{"username":"lp1","email":"lp1@test.com","password":"Test1234!"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+for m in GET POST PUT PATCH DELETE; do
+  echo "=== $m"; curl -si -X $m <target>/api/admin/<route> -H "Authorization: Bearer $LOW" | head -3
+done
+```
+
+Or let the harness diff all three identities at once:
+
+```bash
+python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> \
+  --token "$ADMIN_TOKEN" --lowpriv-token "$LOW" --write --paths paths.txt
+```
+
+**The tell is inconsistency, not failure.** If three routes under `/api/admin/` answer
+the low-priv account `403 Admin access required` and a fourth answers `200`, the app has
+told you the group is meant to be guarded and named the one that isn't. Read a lone `200`
+against the siblings, never on its own.
+
+**Write verbs are where these live.** `GET` routes get the guard because they are the
+ones a developer visits; the `DELETE` behind an admin-panel button is the one that gets
+forgotten. `probe.py` skips `PUT`/`PATCH`/`DELETE` without `--write`, so the default run
+is blind to exactly the verb that matters — pass `--write` on any `/admin/` prefix.
+
+> **Being handed privileged credentials is a hint, not a shortcut.** When a lab gives you
+> `admin:admin`, auth-vs-anonymous is the wrong axis: as admin the vulnerable call
+> succeeds (correct behaviour), and anonymously it 401s. Neither is a finding. The creds
+> exist to *show you which functions to re-run as a nobody*. On Ottergram every
+> `/api/admin/*` route enforced the role except `DELETE /api/admin/posts/:id`, which
+> checked only that a token existed — a self-registered account deleted any user's post
+> and got the flag in the response body.
+
 ## Shadow / legacy API routes
 
 The frontend calling only `/v2/*` does not mean older prefixes are gone. Try the same path under `/api/`, `/v1/`, `/internal/`, no prefix — the versioned route may enforce a role allowlist the legacy one skips (Sokudo: `PUT /v1/profile` filtered `role`, `PUT /api/profile` did not).

@@ -12,18 +12,36 @@ Usage:
   # feed it jsmine's METHOD -> PATH section so POST routes get probed as POST:
   python3 jsmine.py recon/ | python3 probe.py --base https://target --token TOK --paths -
 
+  # three identities at once — privileged, low-priv, anonymous:
+  python3 probe.py --base https://target --token "$ADMIN" --lowpriv-token "$USER" \
+      --write --paths paths.txt
+
 Input lines may be either "/api/thing" (probed as GET) or "POST /api/thing".
 GET-only probing silently mislabels write-only endpoints as not-a-route: an SPA
 serves index.html for GET /api/profile/avatar/import, which looks exactly like a
 404 fallback. That endpoint was the entire solve on CafeClub.
 
+Authenticated-vs-anonymous is only two of the three identities that matter. When a
+challenge *hands* you privileged credentials, that axis is the wrong one: as admin a
+successful DELETE /api/admin/posts/4 is correct behaviour, and anonymously it 401s —
+neither is a finding. Only a second, low-privilege account exposes the missing guard.
+That was the whole solve on Ottergram, where DELETE /api/admin/posts/:id was the one
+route under /api/admin that never got the requireAdmin middleware.
+
+On write verbs the low-priv identity is probed FIRST. Whichever identity succeeds
+destroys the object the others were going to test, so privileged-first ordering reports
+"admin 200, low-priv 404" and buries the finding. Any surviving 2xx-then-404 sequence is
+labelled INCONCLUSIVE rather than counted as a negative.
+
 Options:
-  --out DIR     save every response body (default: ./probe_out)
-  --methods     also send OPTIONS to enumerate allowed methods
-  --write       also probe PUT/PATCH/DELETE (skipped by default -- they mutate
-                your own test state; GET/POST discovery is non-destructive enough)
-  --id VAL      substitute for {...} placeholders in jsmine paths (default 1)
-  --delay S     per-request delay (default 0.05)
+  --out DIR            save every response body (default: ./probe_out)
+  --methods            also send OPTIONS to enumerate allowed methods
+  --write              also probe PUT/PATCH/DELETE (skipped by default -- they mutate
+                       your own test state; GET/POST discovery is non-destructive enough)
+  --lowpriv-token TOK  second, unprivileged identity — enables PRIVILEGE GAP detection
+  --lowpriv-cookie C   same, as a cookie
+  --id VAL             substitute for {...} placeholders in jsmine paths (default 1)
+  --delay S            per-request delay (default 0.05)
 """
 import argparse
 import json
@@ -161,12 +179,63 @@ def is_expected_public_auth_response(path, r):
     return keys <= PUBLIC_ENVELOPE_KEYS
 
 
+# Routes whose *name* asserts they are privileged. A low-priv identity getting a
+# normal answer from one of these is a finding on its own, with no peer needed.
+ADMIN_PATH_RE = re.compile(
+    r'/(?:admin|administrator|manage|management|moderat\w*|staff|internal|superuser|'
+    r'sudo|root|console|backoffice|back-office|owner)(?:/|$|\?)', re.I)
+
+# A denial, however the app words it. Status codes are jittered by labs, so the
+# body has to be able to carry the verdict on its own.
+DENIAL_RE = re.compile(
+    r'(admin (?:access|privileges?) required|access denied|forbidden|not authoriz|'
+    r'unauthoriz|insufficient (?:permission|privilege|role|scope)|permission denied|'
+    r'requires? (?:admin|elevated)|must be an? admin)', re.I)
+
+
+def classify_identity(r, cal_size, cal_ctype):
+    """How did one identity fare on this route?
+
+    'allowed' is deliberately narrow: a real, non-error, non-denial response. A 404
+    or a validation error is not access — it must not read as a privilege gap.
+    """
+    if r is None:
+        return "-"
+    if isinstance(r, Exception):
+        return "err"
+    size, ctype = len(r.content), (r.headers.get("content-type") or "").split(";")[0]
+    if (size == cal_size and ctype == cal_ctype) or is_framework_404(r):
+        return "not-a-route"
+    if r.status_code in (401, 403) or DENIAL_RE.search((r.text or "")[:400]):
+        return "denied"
+    if 200 <= r.status_code < 400:
+        return "ALLOWED"
+    return "error"
+
+
+def prefix_of(path):
+    """Group routes by their first two path segments, for peer comparison.
+
+    /api/admin/posts/1 and /api/admin/flagged-posts both -> /api/admin. When some
+    routes in a group deny the low-priv identity and others do not, the app has
+    told us the group is meant to be guarded and named the one that isn't. This
+    catches privileged groups whose name is not in ADMIN_PATH_RE.
+    """
+    parts = [seg for seg in path.split("?", 1)[0].split("/") if seg]
+    if not parts:
+        return None
+    return "/" + "/".join(parts[:2])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
     ap.add_argument("--paths", required=True, help="file with one path per line, or - for stdin")
     ap.add_argument("--token")
     ap.add_argument("--cookie")
+    ap.add_argument("--lowpriv-token", dest="lowpriv_token",
+                    help="second, unprivileged identity — enables PRIVILEGE GAP detection")
+    ap.add_argument("--lowpriv-cookie", dest="lowpriv_cookie")
     ap.add_argument("--out", default="probe_out")
     ap.add_argument("--methods", action="store_true")
     ap.add_argument("--write", action="store_true")
@@ -177,13 +246,19 @@ def main():
     base = a.base.rstrip("/")
     raw = sys.stdin.read() if a.paths == "-" else open(a.paths, encoding="utf-8").read()
     targets, skipped_writes = parse_targets(raw, a.write, a.id)
+    has_lowpriv = bool(a.lowpriv_token or a.lowpriv_cookie)
     if skipped_writes:
         unique_skipped = list(dict.fromkeys(skipped_writes))
         print("[!] skipped %d write target(s); PUT/PATCH/DELETE require --write because they mutate state"
               % len(unique_skipped))
         for method, path in unique_skipped:
             print("    SKIPPED %-6s %s" % (method, path))
-        print("[!] review object IDs and payloads before rerunning with --write\n")
+        print("[!] review object IDs and payloads before rerunning with --write")
+        if has_lowpriv and any(ADMIN_PATH_RE.search(p) for _, p in unique_skipped):
+            print("[!] a privileged route was skipped on a write verb — that is exactly where "
+                  "missing function-level guards live (Ottergram: DELETE /api/admin/posts/:id). "
+                  "Rerun with --write.")
+        print()
     if not targets:
         print("no non-write paths given")
         return 1
@@ -195,6 +270,15 @@ def main():
     if a.cookie:
         auth["Cookie"] = a.cookie
     has_auth = bool(a.token or a.cookie)
+
+    lowpriv = dict(BASE_HEADERS)
+    if a.lowpriv_token:
+        lowpriv["Authorization"] = "Bearer " + a.lowpriv_token
+    if a.lowpriv_cookie:
+        lowpriv["Cookie"] = a.lowpriv_cookie
+    if has_lowpriv:
+        print("[*] low-priv identity supplied — routes answering it normally are "
+              "checked for missing function-level authorization")
 
     sess = requests.Session()
 
@@ -211,20 +295,55 @@ def main():
               % (m, bogus, cs, csize, cctype))
     print("[*] size+ctype matching the above = NOT-A-ROUTE (status ignored)\n")
 
-    print("%-46s %-22s %-22s %s" % ("METHOD PATH", "WITH AUTH", "NO AUTH", "VERDICT"))
-    print("-" * 110)
+    if has_lowpriv:
+        print("%-40s %-20s %-20s %-20s %s"
+              % ("METHOD PATH", "WITH AUTH", "LOW-PRIV", "NO AUTH", "VERDICT"))
+        print("-" * 130)
+    else:
+        print("%-46s %-22s %-22s %s" % ("METHOD PATH", "WITH AUTH", "NO AUTH", "VERDICT"))
+        print("-" * 110)
 
     flags, leaks, real = {}, [], []
+    gaps, seen_states = [], {}
     for method, p in targets:
         url = base + p
         label = "%-6s %s" % (method, p)
         cal_size, cal_ctype = cal_by_method[method]
-        ra = fetch(sess, url, auth, method) if has_auth else None
-        time.sleep(a.delay)
-        rn = fetch(sess, url, BASE_HEADERS, method)
-        time.sleep(a.delay)
+        # Order matters on a write verb: the first identity to succeed CONSUMES the
+        # object, and every later identity then probes something that no longer
+        # exists. Probing privileged-first turned the live Ottergram DELETE into
+        # "admin 200, low-priv 404" — a false negative on the exact bug being hunted.
+        # The low-priv identity therefore goes first on writes; its answer is the
+        # finding, and the privileged 200 is the least informative of the three.
+        order = (("lowpriv", "auth", "noauth") if method in WRITE_METHODS
+                 else ("auth", "lowpriv", "noauth"))
+        got = {}
+        for who in order:
+            if who == "auth":
+                got["auth"] = fetch(sess, url, auth, method) if has_auth else None
+            elif who == "lowpriv":
+                got["lowpriv"] = fetch(sess, url, lowpriv, method) if has_lowpriv else None
+            else:
+                got["noauth"] = fetch(sess, url, BASE_HEADERS, method)
+            time.sleep(a.delay)
+        ra, rl, rn = got["auth"], got["lowpriv"], got["noauth"]
+
+        # Did an earlier identity destroy the thing a later one was meant to test?
+        consumed = None
+        if method in WRITE_METHODS:
+            winner = None
+            for who in order:
+                r = got.get(who)
+                if r is None or isinstance(r, Exception):
+                    continue
+                if winner and r.status_code in (404, 410):
+                    consumed = (winner, who)
+                    break
+                if 200 <= r.status_code < 300:
+                    winner = who
 
         sa = describe(ra) if ra is not None else ("-", 0, "-")
+        sl = describe(rl) if rl is not None else ("-", 0, "-")
         sn = describe(rn)
 
         # is it a real route at all?
@@ -274,12 +393,31 @@ def main():
             verdict = "auth-required"
             real.append(label)
 
-        print("%-46s %-22s %-22s %s" % (
-            label[:46], "%s %sB %s" % sa if ra is not None else "-",
-            "%s %sB %s" % sn, verdict))
+        # ---- third identity: does an unprivileged account get in too?
+        lp_state = classify_identity(rl, cal_size, cal_ctype) if has_lowpriv else "-"
+        if has_lowpriv and verdict != "not-a-route":
+            seen_states.setdefault(prefix_of(p), []).append((label, lp_state))
+            if lp_state == "ALLOWED" and ADMIN_PATH_RE.search(p):
+                verdict = "*** PRIVILEGE GAP — low-priv identity reached a privileged route ***"
+                gaps.append(label)
+
+        if has_lowpriv:
+            print("%-40s %-20s %-20s %-20s %s" % (
+                label[:40], "%s %sB %s" % sa if ra is not None else "-",
+                "%s %sB %s" % sl if rl is not None else "-",
+                "%s %sB %s" % sn, verdict))
+        else:
+            print("%-46s %-22s %-22s %s" % (
+                label[:46], "%s %sB %s" % sa if ra is not None else "-",
+                "%s %sB %s" % sn, verdict))
+
+        if consumed:
+            print("%-40s [!] INCONCLUSIVE for '%s': the '%s' identity already consumed this "
+                  "object (2xx, then 404/410). Re-run this route against a fresh id before "
+                  "trusting the '%s' result." % ("", consumed[1], consumed[0], consumed[1]))
 
         # save + scan
-        for tag, r in (("auth", ra), ("noauth", rn)):
+        for tag, r in (("auth", ra), ("lowpriv", rl), ("noauth", rn)):
             if isinstance(r, Exception) or r is None:
                 continue
             fn = re.sub(r'[^a-zA-Z0-9]+', '_', p).strip('_') or "root"
@@ -304,10 +442,30 @@ def main():
             except Exception:
                 pass
 
+    # ---- peer inconsistency: same route group, different low-priv treatment.
+    # Catches privileged groups ADMIN_PATH_RE cannot know the name of.
+    for group, entries in sorted(seen_states.items()):
+        if group is None or len(entries) < 2:
+            continue
+        denied = [lab for lab, st in entries if st == "denied"]
+        allowed = [lab for lab, st in entries if st == "ALLOWED"]
+        if not denied or not allowed:
+            continue
+        for lab in allowed:
+            if lab not in gaps:
+                gaps.append(lab)
+                print("[!] PRIVILEGE GAP %s — %d sibling route(s) under %s deny the low-priv "
+                      "identity, this one does not" % (lab.strip(), len(denied), group))
+
     print("\n" + "=" * 110)
-    print("real routes: %d   no-auth issues: %d" % (len(set(real)), len(leaks)))
+    print("real routes: %d   no-auth issues: %d   privilege gaps: %d"
+          % (len(set(real)), len(leaks), len(gaps)))
     for p in leaks:
         print("   NO-AUTH: %s" % p)
+    for p in gaps:
+        print("   PRIVILEGE GAP: %s" % p.strip())
+    if has_lowpriv and not gaps:
+        print("   no route treated the low-priv identity as privileged")
     if flags:
         print("\n" + "!" * 60)
         for f, where in flags.items():

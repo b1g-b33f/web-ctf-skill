@@ -27,6 +27,17 @@ Routes:
   POST /api/graphql       -> authenticated GraphQL endpoint with introspection disabled;
                               validation errors disclose user(id: ID!), whose password
                               field carries a synthetic regression flag
+  *    /api/admin/*       -> Ottergram-shaped function-level authorization: a bearer
+                              token whose value contains "admin" is the privileged
+                              identity, any other token is low-priv, no token is 401.
+                              Three routes enforce the role; DELETE /api/admin/posts/1
+                              only checks that a token exists and returns a flag —
+                              invisible to an auth-vs-anonymous probe, since the
+                              privileged identity succeeds on all four by design
+  *    /api/reports/*     -> same gap in a group whose *name* carries no privilege
+                              signal, so only peer inconsistency can find it
+  *    /api/feed/*        -> ordinary group, every identity allowed — the control
+                              case that must never be reported as a privilege gap
   OPTIONS *                -> 204 with Access-Control-Allow-Methods set and no
                               route-specific Allow header, so probe.py's --methods
                               output must read "CORS policy", never "Allow"
@@ -79,6 +90,37 @@ STYLED_DENIAL_HTML = (
     b'<p>You do not have permission to access this resource.</p></body></html>')
 CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE"
 GRAPHQL_FLAG = "bug" + "{GraphqlQuickRegression123}"
+
+# Ottergram-shaped function-level authorization. Three routes under /api/admin
+# enforce the role; DELETE /api/admin/posts/1 only checks that *a* token exists,
+# which is the real bug that lab shipped. The privileged identity succeeds on all
+# four (correct behaviour) and the anonymous one is refused by all four, so an
+# auth-vs-anon probe sees nothing -- only the low-priv identity separates them.
+# The flag is worded so flaghook.py's IGNORE rule treats it as a placeholder and
+# the regression suite never pollutes the real flag log.
+ADMIN_OK = b'{"message":"Welcome to the admin panel"}'
+ADMIN_FLAGGED = b'{"flagged":[]}'
+ADMIN_APPROVED = b'{"message":"Post approved"}'
+ADMIN_DENIED = b'{"error":"Admin access required"}'
+NO_TOKEN = b'{"error":"Access token required"}'
+BFLA_FLAG = "flag" + "{example_privilege_gap_fixture}"
+BFLA_DELETED = ('{"message":"Post deleted successfully","flag":"%s"}' % BFLA_FLAG).encode()
+
+# A privileged group whose name says nothing about privilege -- ADMIN_PATH_RE
+# cannot know /api/reports is guarded. Two siblings refuse the low-priv identity
+# and one does not, which is the only evidence probe.py gets, and it must be enough.
+# Real objects are consumed by the first identity that deletes them. Post 1 is
+# idempotent (the simple case); post 2 is stateful and 404s on every call after the
+# first, which is what the live Ottergram target actually did -- probing the
+# privileged identity first turned the finding into "admin 200, low-priv 404".
+DELETED_POSTS = set()
+POST_MISSING = b'{"error":"Post not found"}'
+
+REPORT_RESOLVED = b'{"message":"Report resolved"}'
+REPORT_DELETED = b'{"message":"Report deleted"}'
+# An ordinary any-logged-in-user group: every route answers every identity. A
+# low-priv account succeeding here is correct, and must never read as a gap.
+FEED_OK = b'{"posts":[{"id":1,"caption":"otter"}]}'
 
 MAPPED_JS = b'// mapped bundle, no routes of its own\n//# sourceMappingURL=/mapped.js.map\n'
 VENDOR_SRC = "// vendor filler — must be excluded from the extracted src/ tree"
@@ -221,6 +263,37 @@ class Handler(BaseHTTPRequestHandler):
                                     "username": doc["username"]}).encode()
                 return 200, "application/json", body
             return 400, "application/json", b'{"status":"invalid","error":"verification failed"}'
+        if path.startswith("/api/admin"):
+            auth = self.headers.get("Authorization") or ""
+            if not auth:
+                return 401, "application/json", NO_TOKEN
+            is_admin = "admin" in auth.lower()
+            # The one route that forgot requireAdmin: any bearer token gets in.
+            if path == "/api/admin/posts/1" and self.command == "DELETE":
+                return 200, "application/json", BFLA_DELETED
+            if path == "/api/admin/posts/2" and self.command == "DELETE":
+                if "2" in DELETED_POSTS:
+                    return 404, "application/json", POST_MISSING
+                DELETED_POSTS.add("2")
+                return 200, "application/json", BFLA_DELETED
+            if not is_admin:
+                return 403, "application/json", ADMIN_DENIED
+            if path == "/api/admin/posts/1/approve":
+                return 200, "application/json", ADMIN_APPROVED
+            if path == "/api/admin/flagged-posts":
+                return 200, "application/json", ADMIN_FLAGGED
+            return 200, "application/json", ADMIN_OK
+        if path.startswith("/api/reports"):
+            auth = self.headers.get("Authorization") or ""
+            if not auth:
+                return 401, "application/json", NO_TOKEN
+            if path == "/api/reports/1" and self.command == "DELETE":
+                return 200, "application/json", REPORT_DELETED
+            if "admin" not in auth.lower():
+                return 403, "application/json", ADMIN_DENIED
+            return 200, "application/json", REPORT_RESOLVED
+        if path.startswith("/api/feed"):
+            return 200, "application/json", FEED_OK
         if path == "/api/nosql-rate-limit" and self.command == "POST":
             return 429, "application/json", b'{"error":"slow down"}'
         if path == "/api/nosql-crash" and self.command == "POST":
