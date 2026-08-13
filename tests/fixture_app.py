@@ -21,6 +21,12 @@ Routes:
                                     with or without auth (a public auth-flow route,
                                     not a leak); ?mode=leak switches in an extra
                                     reset_token field, which must stay a leak
+  GET  /api/widgets/<id>  -> numeric path parameter concatenated into real SQL: the
+                              shape a quote probe cannot distinguish from a bound one,
+                              since a stray quote just fails to match. Returns a single
+                              row, so a UNION must empty the left side to be seen
+  GET  /api/gadgets/<id>  -> the same route with the id bound — the control that must
+                              never be reported as injectable
   GET  /api/stocks/search -> 401, JSON error body — a protected leaf nested below
                               /api, reachable only by direct guess since /api itself
                               is the SPA fallback
@@ -47,7 +53,45 @@ Routes:
 """
 import json as _json
 import re
+import sqlite3
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote
+
+# A real SQLite database, so the path-parameter injection fixture exercises actual SQL
+# rather than a hand-rolled imitation: real column counts, real sqlite_master, real
+# single-row semantics. /api/widgets/<id> concatenates; /api/gadgets/<id> binds.
+_DB_LOCK = threading.Lock()
+_DB = sqlite3.connect(":memory:", check_same_thread=False)
+_DB.executescript("""
+CREATE TABLE widgets (id INTEGER PRIMARY KEY, name TEXT, colour TEXT);
+INSERT INTO widgets VALUES (1,'first','red'),(2,'second','blue');
+CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password TEXT);
+INSERT INTO users VALUES (1,'admin','bug{fixture_path_param_union_ok}');
+""")
+
+
+def _widget_row(raw, bound):
+    """Return (status, body) for the widget lookup, concatenated or bound."""
+    with _DB_LOCK:
+        try:
+            if bound:
+                cur = _DB.execute("SELECT id,name,colour FROM widgets WHERE id = ?", (raw,))
+            else:
+                cur = _DB.execute("SELECT id,name,colour FROM widgets WHERE id = %s" % raw)
+            rows = cur.fetchall()
+        except sqlite3.Error:
+            # Swallow the SQL error into the ordinary not-found, exactly like the app
+            # this models. That is what makes a quote probe useless: a syntax error and
+            # a non-matching id are the *same* response, so `1'` -> "not found" says
+            # nothing about whether the id is bound.
+            return 404, b'{"error":"widget not found"}'
+    if not rows:
+        return 404, b'{"error":"widget not found"}'
+    # Only the first row, exactly like a real /resource/:id handler. This is what makes
+    # a naive `1 UNION SELECT <payload>` return the legitimate row and hide the payload.
+    r = rows[0]
+    return 200, _json.dumps({"id": r[0], "name": r[1], "colour": r[2]}).encode()
 
 # A real SPA typically serves this exact same shell for both its own root and its
 # catch-all fallback, so root and "unknown path" are one body here too.
@@ -205,6 +249,18 @@ class Handler(BaseHTTPRequestHandler):
             if "mode=leak" in self.path:
                 return 200, "application/json", FORGOT_PASSWORD_LEAK
             return 200, "application/json", FORGOT_PASSWORD_PUBLIC
+        if path.startswith("/api/vaults/"):
+            # Auth-gated path parameter: every id 401s without a token, which is the
+            # pre-auth state of a real API. A sweep must call this UNTESTED, never clean.
+            if not self.headers.get("Authorization"):
+                return 401, "application/json", b'{"error":"access token required"}'
+            return 200, "application/json", b'{"id":1,"name":"vault"}'
+        if path.startswith("/api/widgets/"):
+            status, body = _widget_row(unquote(path[len("/api/widgets/"):]), bound=False)
+            return status, "application/json", body
+        if path.startswith("/api/gadgets/"):
+            status, body = _widget_row(unquote(path[len("/api/gadgets/"):]), bound=True)
+            return status, "application/json", body
         if path == "/api/stocks/search":
             return 401, "application/json", STOCKS_SEARCH_401
         if path == "/api/jwt-styled-denial":

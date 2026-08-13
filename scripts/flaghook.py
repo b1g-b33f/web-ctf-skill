@@ -19,12 +19,16 @@ import sys
 
 # Deliberately specific: platform-prefixed braces only. A bare {...} would fire
 # on every JS object in a bundle.
+PREFIXES = r'(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)'
 FLAG_RE = re.compile(
-    r'(?<![A-Za-z0-9])(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[A-Za-z0-9_\-!?.@#$%^&*+=/]{3,90}\}')
+    r'(?<![A-Za-z0-9])' + PREFIXES + r'\{[A-Za-z0-9_\-!?.@#$%^&*+=/]{3,90}\}')
 HOOK_CHECK_RE = re.compile(r'bug\{CodexHarnessHookCheck_[A-Za-z0-9_-]{4,40}\}')
 
 # Don't fire on our own log line, on regex literals we ship, or on placeholders.
-IGNORE = re.compile(r'(?:flag\{[^}]*(?:\.\.\.|xxx|your|example|placeholder|\[)[^}]*\}'
+# The placeholder arm must span every prefix FLAG_RE accepts, not just flag{}: writing
+# a writeup that documents the wrapper -- `bug{...}`, `HTB{example}` -- is routine, and
+# hardcoding one prefix here made those hard-block a turn with "REPORT THIS FLAG".
+IGNORE = re.compile(r'(?:' + PREFIXES + r'\{[^}]*(?:\.\.\.|xxx|your|example|placeholder|\[)[^}]*\}'
                     r'|FLAG_RE|flaghook|ctf-flags\.log)', re.I)
 
 LOG = os.path.join(os.path.expanduser("~"), ".claude", "ctf-flags.log")

@@ -24,7 +24,7 @@ different shape, not a superset of this one.
 ## How it is organised
 
 ```
-SKILL.md            ~4.9k tokens, always loaded: routing + order of operations
+SKILL.md            ~6.2k tokens, always loaded: routing + order of operations
 references/*.md     15 files, loaded one at a time when a signal fires
 scripts/*.py        real tooling (env-overridable paths — portable as-is)
 ```

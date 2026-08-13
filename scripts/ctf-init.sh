@@ -258,7 +258,27 @@ JOB_QUICK=$!
 ) &
 JOB_FEROX=$!
 
-# ── Job 4: nuclei (skipped on bugforge) ─────────────────────────────────────────────────
+# ── Job 4: SQLi triage on every path parameter ──────────────────────────────
+# A REST id lives in the path, so there is no query param to name and a quote
+# probe against it is meaningless: /api/products/1' returning "not found" is
+# exactly what a bound integer does. Only a boolean differential separates the
+# two, and it costs 3-5 requests per position. This is the cheapest question in
+# the whole run and it is the one that has been skipped.
+(
+  echo "[job:sqlisweep] starting"
+  if [[ -s "$RECON/methods.txt" ]]; then
+    python3 "$SCRIPT_DIR/sqlquick.py" --sweep --base "$TARGET" \
+      --methods "$RECON/methods.txt" --out "$RECON/sqlisweep_probe" --delay 0.25 \
+      > "$RECON/sqlisweep.txt" 2>&1
+    echo "[job:sqlisweep] done — $(match_count 'INJECTABLE' "$RECON/sqlisweep.txt") injectable, $(match_count 'UNTESTED' "$RECON/sqlisweep.txt") untested"
+  else
+    echo "no methods.txt — nothing to sweep" > "$RECON/sqlisweep.txt"
+    echo "[job:sqlisweep] skipped — methods.txt empty"
+  fi
+) &
+JOB_SQLI=$!
+
+# ── Job 5: nuclei (skipped on bugforge) ─────────────────────────────────────────────────
 if [[ "$PLATFORM" != "bugforge" ]]; then
   (
     echo "[job:nuclei] starting"
@@ -274,11 +294,11 @@ else
 fi
 
 # ── Wait and report ──────────────────────────────────────────────────────────
-echo "[*] Jobs running: meta, quickcheck, feroxbuster${JOB_NUCLEI:+, nuclei}"
+echo "[*] Jobs running: meta, quickcheck, feroxbuster, sqlisweep${JOB_NUCLEI:+, nuclei}"
 echo "[*] Waiting for all jobs to finish..."
 echo ""
 
-wait $JOB_META $JOB_QUICK $JOB_FEROX ${JOB_NUCLEI:+$JOB_NUCLEI}
+wait $JOB_META $JOB_QUICK $JOB_FEROX $JOB_SQLI ${JOB_NUCLEI:+$JOB_NUCLEI}
 
 echo ""
 echo "════════════════════════════════════════"
@@ -300,6 +320,25 @@ if [[ -s "$RECON/graphql-endpoints.txt" ]]; then
   while IFS= read -r path; do
     echo "python3 $SCRIPT_DIR/graphqlquick.py --url $TARGET$path --token \"\$TOKEN\" --id \"\$YOUR_ID\" --out $RECON/graphqlquick"
   done < "$RECON/graphql-endpoints.txt"
+fi
+
+echo ""
+echo "── Path-parameter SQLi triage (recon/sqlisweep.txt) ─────"
+if grep -q 'INJECTABLE' "$RECON/sqlisweep.txt" 2>/dev/null; then
+  echo "  *** INJECTABLE PATH PARAMETER — this outranks everything else below ***"
+  grep -E 'INJECTABLE|python3 ' "$RECON/sqlisweep.txt" 2>/dev/null
+else
+  grep -E 'no differential|UNTESTED|nothing to sweep|THROTTLED' "$RECON/sqlisweep.txt" 2>/dev/null \
+    | head -12 || echo "  none"
+  echo "  (GET path params only — query params, POST bodies and headers are NOT cleared)"
+  if grep -q 'UNTESTED' "$RECON/sqlisweep.txt" 2>/dev/null; then
+    echo ""
+    echo "  [!] UNTESTED means NOT CLEARED. On an auth-gated API every id 401s before"
+    echo "      login, so this sweep proves nothing until you re-run it with a token."
+    echo "      Do it in the same burst as the authenticated jsharvest re-run:"
+    echo "      python3 $SCRIPT_DIR/sqlquick.py --sweep --base $TARGET \\"
+    echo "        --methods $RECON/methods.txt --token \"\$TOKEN\" --out $RECON/sqlisweep_auth"
+  fi
 fi
 
 echo ""
