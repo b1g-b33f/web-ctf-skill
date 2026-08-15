@@ -1344,6 +1344,75 @@ class SqlquickSweepTest(unittest.TestCase):
         self.assertIn("nothing to sweep", out)
 
 
+class TemplatequickRegressionTest(unittest.TestCase):
+    """A valid evaluator response can disclose an undocumented template field that
+    an empty-body route probe never reaches. The helper must round-trip only the
+    response-only marker field, prove interpolation with a harmless context value,
+    and stop immediately when a high-value variable returns a flag."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_response_only_placeholder_reaches_flag_in_bounded_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "templatequick.py", "--url", self.base_url + "/api/indicator",
+                "--token", "fixture-user",
+                "--data", '{"stock_id":1,"formula":"10*10"}',
+                "--delay", "0", "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("response-only placeholder field: caption={value}", proc.stdout)
+            self.assertIn("client controls response field caption", proc.stdout)
+            self.assertIn("INTERPOLATED caption {value} -> 100", proc.stdout)
+            expected = "bug" + "{example_template_variable_fixture}"
+            self.assertIn("FLAG " + expected, proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(len(records), 4, records)
+            self.assertEqual(records[-1]["label"], "high-value:caption:flag")
+
+    def test_no_placeholder_is_inconclusive_without_extra_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "templatequick.py", "--url", self.base_url + "/api/feed/list",
+                "--token", "fixture-user", "--data", '{}',
+                "--delay", "0", "--out", tmp)
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("no top-level response-only single-brace marker", proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                self.assertEqual(sum(1 for line in fh if line.strip()), 1)
+
+    def test_invalid_baseline_guard_stops_before_field_probes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "templatequick.py", "--url", self.base_url + "/api/indicator",
+                "--token", "fixture-user", "--data", '{"stock_id":1}',
+                "--field", "caption", "--delay", "0", "--out", tmp)
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("known-valid baseline did not succeed (HTTP 400)", proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                self.assertEqual(sum(1 for line in fh if line.strip()), 1)
+
+    def test_rate_limit_and_gateway_stop_before_field_probes(self):
+        cases = (("/api/nosql-rate-limit", 2, "429 rate limit"),
+                 ("/api/nosql-crash", 3, "CIRCUIT BREAKER"))
+        for path, expected_code, marker in cases:
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                proc = run_full(
+                    "templatequick.py", "--url", self.base_url + path,
+                    "--data", '{}', "--field", "caption",
+                    "--delay", "0", "--out", tmp)
+                self.assertEqual(proc.returncode, expected_code, proc.stdout + proc.stderr)
+                self.assertIn(marker, proc.stdout)
+                with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                    self.assertEqual(sum(1 for line in fh if line.strip()), 1)
+
+
 class FlaghookPlaceholderPrefixTest(unittest.TestCase):
     """The placeholder suppressor was hardcoded to flag{}, while FLAG_RE accepts nine
     prefixes. Writing `bug{...}` into a worklog documenting the wrapper therefore

@@ -33,6 +33,10 @@ Routes:
   POST /api/graphql       -> authenticated GraphQL endpoint with introspection disabled;
                               validation errors disclose user(id: ID!), whose password
                               field carries a synthetic regression flag
+  POST /api/indicator     -> Shady-Oaks-shaped valid request whose response adds an
+                              undocumented caption="{value}" field; resubmitting that
+                              response-only field expands safe context variables and
+                              a synthetic high-value flag variable
   *    /api/admin/*       -> Ottergram-shaped function-level authorization: a bearer
                               token whose value contains "admin" is the privileged
                               identity, any other token is low-priv, no token is 401.
@@ -200,6 +204,8 @@ NOSQL_DOCS = [
     {"email": "whiskers@example.test", "backupCode": "bug{aZ9}", "username": "whiskers"},
 ]
 
+TEMPLATE_FLAG = "bug" + "{example_template_variable_fixture}"
+
 
 def _mongo_match(actual, wanted):
     if not isinstance(wanted, dict):
@@ -306,6 +312,29 @@ class Handler(BaseHTTPRequestHandler):
             body = _json.dumps({"errors": [{
                 "message": 'Cannot query field "%s" on type "Query".' % name
             }]}).encode()
+            return 200, "application/json", body
+        if path == "/api/indicator" and self.command == "POST":
+            if not self.headers.get("Authorization"):
+                return 401, "application/json", b'{"error":"access token required"}'
+            data = data if isinstance(data, dict) else {}
+            if "stock_id" not in data or "formula" not in data:
+                return 400, "application/json", b'{"error":"stock_id and formula are required"}'
+            caption = data.get("caption", "{value}")
+            if "caption" in data and isinstance(caption, str):
+                values = {
+                    "value": 100,
+                    "name": "Oakleaf Holdings",
+                    "symbol": "OAKLEAF",
+                    "flag": TEMPLATE_FLAG,
+                    "api_key": TEMPLATE_FLAG,
+                }
+                match = re.fullmatch(r'\{([A-Za-z_][A-Za-z0-9_]*)\}', caption)
+                if match and match.group(1) in values:
+                    caption = values[match.group(1)]
+            body = _json.dumps({
+                "stock": {"id": 1, "symbol": "OAKLEAF", "name": "Oakleaf Holdings"},
+                "formula": data.get("formula"), "value": 100, "caption": caption,
+            }).encode()
             return 200, "application/json", body
         if path == "/api/account/recover" and self.command == "POST":
             data = data if isinstance(data, dict) else {}

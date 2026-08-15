@@ -1,5 +1,31 @@
 # SSTI — input rendered back into a template
 
+## Response-only formatter fast track
+
+A successful JSON response is schema evidence. Compare its top-level keys with the valid request
+that produced it. If the response adds a field whose complete value is a single-brace placeholder
+such as `"caption":"{value}"`, resubmit that field before trying generic SSTI payloads:
+
+```bash
+python3 ~/.claude/skills/web-ctf/scripts/templatequick.py \
+  --url <target>/api/forecast/indicator --token "$TOKEN" \
+  --data '{"stock_id":1,"formula":"10*10"}' --out recon/templatequick
+```
+
+The helper only auto-selects top-level placeholder fields absent from the request. It sends a
+literal control to prove the client owns the field, confirms interpolation with `{value}`,
+`{name}`, or `{symbol}`, then checks `{flag}`, `{api_key}`, `{secret}`, `{token}`, and `{key}`.
+It scans response headers and bodies, records JSONL evidence, and stops on a flag, `429`, gateway
+failure, or its request budget. Use `--field <name>` only when live evidence identifies a field
+whose baseline value is not a single-brace marker.
+
+This comes before classic `{{7*7}}` matrices. On Shady Oaks, the documented `formula` input was
+properly constrained; the response-only `caption:"{value}"` field accepted `{flag}` and returned
+the flag in four requests from the valid baseline. Once a harmless control renders, this live
+read signal outranks waiting on a blind webhook or callback.
+
+## General engine probes
+
 Probe all major engines at once:
 
 ```bash

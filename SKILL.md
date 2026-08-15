@@ -27,6 +27,11 @@ If args are missing, infer from the conversation. Don't stop to ask for a challe
 
 Scanners are step 7, not step 1. On GalaxyDash-011 a scanner-first run cost first blood by ~1 minute; the flag was in the first authenticated endpoint probe. Read the data the app returns before reaching for a tool.
 
+**Treat a valid JSON response as input-schema evidence.** If it adds a top-level field the
+request did not send and that field contains a placeholder such as `{value}`, round-trip that
+field before broad payload testing. Prove client control, then harmless interpolation, then try
+high-value variables with `templatequick.py` → `references/ssti.md`.
+
 **Exception — a named CVE or technique jumps the queue.** If the brief, a hint, or the user
 names something specific (a CVE id, "wp2shell", a technique by name), search for and read
 that writeup *before* probing. Don't re-derive the mechanism from a PoC script and don't
@@ -107,6 +112,10 @@ Route on what the app actually did, not on a checklist sweep. Read **one** refer
 > path, deserialize, import a file — outranks a parameter that makes the server
 > **compute** — price, quantity, points, balance, voucher.
 
+An **observed interpolation control** outranks a merely possible blind action. A response-only
+`caption:"{value}"` that renders after being resubmitted is a live read primitive; run its bounded
+template fast track before waiting on a webhook or callback.
+
 Action params are rare and usually the planted bug; arithmetic surfaces are the most
 commonly hardened thing in a commerce lab. On CafeClub the JS mine fired `logic-race`,
 `xss-ssrf` and `json-type-confusion` simultaneously; the gift-card/points logic was
@@ -124,7 +133,7 @@ result. Record it and leave, don't re-derive bigger versions of the same number.
 | JWT in response; session cookie; reset/forgot-password flow; login oracle | `references/auth-jwt.md` |
 | Numeric/UUID ids in responses; `role`/`isAdmin`/`permissions` fields; 401/403 endpoints; **privileged creds handed to you**; an admin panel whose buttons fire write verbs | `references/access-control.md` |
 | Search/filter/id param; **any `{...}` path segment — a REST id is an injection point, and a quote proves nothing there**; DB error on odd input; Mongo/mongoose in use | `references/injection.md` |
-| Input echoed back into a rendered page or document | `references/ssti.md` |
+| Input echoed into a rendered page/document; **a valid JSON response adds a response-only placeholder field such as `caption:"{value}"`** | `references/ssti.md` |
 | Filename or path parameter; file upload accepting a filename | `references/traversal-upload.md` |
 | `/graphql` endpoint or introspection available | `references/graphql.md` |
 | "Admin reviews your submission" workflow; **any param taking a URL** — import/fetch/callback/webhook/avatar-from-URL | `references/xss-ssrf.md` |
@@ -233,6 +242,12 @@ python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
 
 # low-volume SQLi fast-track — run this BEFORE sqlmap → references/injection.md §C
 python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+
+# a valid evaluator/renderer response adds a top-level field like caption:"{value}":
+# prove the response-only field is controllable, then try harmless and high-value variables
+python3 ~/.claude/skills/web-ctf/scripts/templatequick.py \
+  --url "<target>/api/forecast/indicator" --token "$TOKEN" \
+  --data '{"stock_id":1,"formula":"10*10"}' --out recon/templatequick
 
 # a REST id in the PATH is injectable too, and --param cannot name it. ctf-init.sh
 # already swept these pre-auth; on an auth-gated API every id 401s then, so the sweep
