@@ -237,6 +237,9 @@ JOB_META=$!
     api/me api/profile api/users api/search api/stocks api/stocks/search \
     api/items/search api/account api/account/reset api/account/verify \
     api/account/recover api/review-requests api/reset-password \
+    dev/inbox api/auth/inbox api/auth/magic-link api/auth/magic-link/request \
+    api/auth/magic-link/verify api/auth/claim api/auth/activate api/auth/invite \
+    api/profile/password \
     api/password-reset api/flag api/admin/flag api/admin/stats api/admin/users \
     > "$RECON/quickcheck_probe.log" 2>&1
   echo "[job:quickcheck] done"
@@ -313,6 +316,22 @@ cat "$RECON/headers.txt" 2>/dev/null | grep -E "^(HTTP|Server|X-Powered|Set-Cook
 echo ""
 echo "── JS harvest — METHOD -> PATH (recon/methods.txt) ─────"
 cat "$RECON/methods.txt" 2>/dev/null || echo "  none"
+
+AUTH_LIFECYCLE_RE='magic|passwordless|inbox|outbox|claim|activat|enroll|invite|/api/(email|emails|mail)([/?[:space:]]|$)'
+{
+  grep -Ei "$AUTH_LIFECYCLE_RE" "$RECON/methods.txt" 2>/dev/null || true
+  grep -Ei "$AUTH_LIFECYCLE_RE" "$RECON/quickcheck_hits.txt" 2>/dev/null || true
+} | awk '!seen[$0]++' > "$RECON/auth-lifecycle-signals.txt"
+if [[ -s "$RECON/auth-lifecycle-signals.txt" ]]; then
+  echo ""
+  echo "── Auth lifecycle / artifact fast track ─"
+  cat "$RECON/auth-lifecycle-signals.txt"
+  echo "  [!] Reserve at least one untouched seeded identity. Test a live token against"
+  echo "      claim/register fields before redeeming it through the intended flow."
+  echo "  python3 $SCRIPT_DIR/authquick.py --base $TARGET \\"
+  echo "    --account '<email>=<name>' --password '<chosen-password>' \\"
+  echo "    --register-field '<required-key>=<value>' --objective-path '<protected-path>'"
+fi
 
 if [[ -s "$RECON/graphql-endpoints.txt" ]]; then
   echo ""

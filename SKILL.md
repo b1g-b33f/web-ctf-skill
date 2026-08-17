@@ -63,7 +63,10 @@ Two rules that repeatedly decide solves:
    family filenames by that signal (for example, app stem + `graphql`) and open at most one exact
    match as a hypothesis. One initial `find`, then move on
    → `references/vault-index.md`
-3. **Get an account** — login with given creds, else open registration → `references/auth-jwt.md`
+3. **Census auth state, then get an account** — login with given creds, else open registration
+   → `references/auth-jwt.md`. If recon shows seeded/pre-provisioned users, first-use activation,
+   magic/passwordless login, invitations, or a dev inbox, reserve one untouched identity and run
+   `authquick.py` before normally redeeming any token. Redemption can burn the vulnerable state.
    **Given privileged creds? Register a throwaway account too, in the same burst.** Handing you
    `admin:admin` makes auth-vs-anonymous the wrong axis — as admin the vulnerable call succeeds
    (correct behaviour) and anonymously it 401s, so neither identity shows a thing. The creds exist
@@ -98,7 +101,7 @@ Two rules that repeatedly decide solves:
 
 Maintain `WORKLOG.md` in the challenge dir throughout: target, creds, `AUTH_HEADER`, endpoint list, **hypotheses killed** (with the evidence that killed them), live leads. This is what survives context compaction — write to it as you go, not at the end.
 
-Track auth state for the whole session: `AUTH_HEADER` (`-H "Authorization: Bearer $TOKEN"` or `-b "session=<cookie>"`), `TOKEN`, `COOKIE`, `YOUR_ID`. Update on every new token.
+Track auth state for the whole session: `AUTH_HEADER` (`-H "Authorization: Bearer $TOKEN"` or `-b "session=<cookie>"`), `TOKEN`, `COOKIE`, `YOUR_ID`, account state, artifact-consumption state, and session assurance. Update on every transition; keep sensitive helper state under `current/auth/`.
 
 ---
 
@@ -130,7 +133,7 @@ result. Record it and leave, don't re-derive bigger versions of the same number.
 
 | Observed signal | Read |
 |---|---|
-| JWT in response; session cookie; reset/forgot-password flow; login oracle | `references/auth-jwt.md` |
+| JWT/session cookie; reset flow/login oracle; magic/passwordless login; activation/claim/invite; public inbox/outbox; seeded account; first-use or step-up gate | `references/auth-jwt.md` |
 | Numeric/UUID ids in responses; `role`/`isAdmin`/`permissions` fields; 401/403 endpoints; **privileged creds handed to you**; an admin panel whose buttons fire write verbs | `references/access-control.md` |
 | Search/filter/id param; **any `{...}` path segment — a REST id is an injection point, and a quote proves nothing there**; DB error on odd input; Mongo/mongoose in use | `references/injection.md` |
 | Input echoed into a rendered page/document; **a valid JSON response adds a response-only placeholder field such as `caption:"{value}"`** | `references/ssti.md` |
@@ -201,6 +204,12 @@ once with an `alive` beacon first, and change the channel rather than extending 
 Use these instead of retyping one-liners — they encode fixes for mistakes that have cost real time.
 
 ```bash
+# bounded first-use/auth-artifact fast track. Run before normal token redemption;
+# generated auth payloads stay scalar and evidence lands under current/auth/.
+python3 ~/.claude/skills/web-ctf/scripts/authquick.py --base <target> \
+  --account '<email>=<name>' --password '<chosen-password>' \
+  --register-field '<required-key>=<value>' --objective-path '<protected-path>'
+
 # the whole cheap JWT surface, FOREGROUND: crack (JWT-specific list, then auto-escalates
 # to rockyou on a miss — ~1s typical, ~40s worst case) + alg:none + forge + fire at a
 # refusing route + scan headers/body for the flag. Run it the moment you hold a token.

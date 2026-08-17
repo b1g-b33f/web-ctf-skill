@@ -51,6 +51,7 @@ browser and exfiltrate to a listener you control.
 
 | Script | Purpose |
 |---|---|
+| `authquick.py` | Bounded first-use account-claim fast track: requests a live magic/activation artifact, checks public dev inboxes, establishes an existing-account registration baseline, tests a small cross-flow token-field set before normal redemption, then proves persistent password login and optionally calls the protected objective. Rotates reserve identities on throttling, circuit-breaks on gateways, keeps auth values scalar-only, and writes redacted JSONL plus mode-0600 state evidence |
 | `jwtquick.py` | The whole cheap JWT surface in one ~1s foreground call: decode, dictionary-crack the HS256 secret (104k JWT-specific secrets, 0.8s worst case), mint `alg:none` ×4 plus privilege-escalated and id-swapped forgeries, fire them all at a route that refuses you, scan status/headers/body for a flag. Emits a re-sign-only control so a win is attributable to escalation rather than to re-signing. Tags each candidate `rejected` / `POSSIBLE BYPASS` / `FLAG` off exact status+body, never off a reworded rejection message |
 | `graphqlquick.py` | Bounded post-auth, read-only GraphQL fast track: anonymous/auth reachability, Query introspection, validation-error schema oracle when introspection is disabled, ID `1`/self checks, independent sensitive-field probes, header/body flag scanning, and hard stops on a flag, rate limit, gateway failure, or request budget. Never generates mutations |
 | `templatequick.py` | Bounded response-only template-field fast track: start from one known-valid JSON request, detect a top-level placeholder field absent from that request, prove client control and harmless single-brace interpolation, then check a five-variable high-value set while scanning headers/body and retaining JSONL evidence |
@@ -68,6 +69,11 @@ browser and exfiltrate to a listener you control.
 | `audit.py` | Repo consistency check, see below |
 
 ```bash
+# run before normally redeeming a magic/activation token for a seeded identity
+python3 ~/.claude/skills/web-ctf/scripts/authquick.py --base <target> \
+  --account '<email>=<name>' --password '<chosen-password>' \
+  --register-field '<required-key>=<value>' --objective-path '<protected-path>'
+
 # run this the moment you hold a token — foreground, ~1s, not a background job
 python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 

@@ -60,7 +60,7 @@ import re
 import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 # A real SQLite database, so the path-parameter injection fixture exercises actual SQL
 # rather than a hand-rolled imitation: real column counts, real sqlite_master, real
@@ -206,6 +206,80 @@ NOSQL_DOCS = [
 
 TEMPLATE_FLAG = "bug" + "{example_template_variable_fixture}"
 
+# Vaultly-shaped first-use account lifecycle. A magic token can be read from a
+# public inbox and is accepted as the undocumented ``code`` registration field
+# while the account is still unclaimed. Redeeming the token normally first burns
+# that state, leaving the user passwordless. authquick.py must therefore try the
+# cross-flow consumer before the intended verification consumer.
+AUTH_FLAG = "bug" + "{AuthQuickRegression123}"
+AUTH_LOCK = threading.Lock()
+AUTH_USERS = {}
+AUTH_TOKENS = {}
+AUTH_MESSAGES = []
+AUTH_SESSIONS = {}
+AUTH_COUNTERS = {"token": 0, "session": 0}
+
+
+def _reset_auth_state():
+    with AUTH_LOCK:
+        AUTH_USERS.clear()
+        AUTH_USERS.update({
+            "maya.chen@acme.test": {
+                "name": "Maya Chen", "password": None, "claimed": False,
+                "verified": False, "executive": True,
+            },
+            "sofia.garcia@acme.test": {
+                "name": "Sofia Garcia", "password": None, "claimed": False,
+                "verified": False, "executive": True,
+            },
+            "burned@acme.test": {
+                "name": "Burned Account", "password": None, "claimed": True,
+                "verified": True, "executive": True,
+            },
+            "rate@acme.test": {
+                "name": "Rate Limited", "password": None, "claimed": False,
+                "verified": False, "executive": True,
+            },
+            "gateway@acme.test": {
+                "name": "Gateway Failure", "password": None, "claimed": False,
+                "verified": False, "executive": True,
+            },
+        })
+        AUTH_TOKENS.clear()
+        AUTH_MESSAGES.clear()
+        AUTH_SESSIONS.clear()
+        AUTH_COUNTERS.update({"token": 0, "session": 0})
+
+
+def _new_auth_token(email):
+    with AUTH_LOCK:
+        AUTH_COUNTERS["token"] += 1
+        token = "fixture-magic-%d" % AUTH_COUNTERS["token"]
+        AUTH_TOKENS[token] = {"email": email, "consumed": False}
+        AUTH_MESSAGES.append({
+            "to": email,
+            "link": "/api/auth/magic-link/verify?token=" + token,
+        })
+        return token
+
+
+def _new_auth_session(email, method):
+    with AUTH_LOCK:
+        AUTH_COUNTERS["session"] += 1
+        session_id = "fixture-session-%d" % AUTH_COUNTERS["session"]
+        AUTH_SESSIONS[session_id] = {"email": email, "method": method}
+        return session_id
+
+
+def _cookie_value(header, name):
+    for part in (header or "").split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.strip().split("=", 1)
+        if key == name:
+            return value
+    return None
+
 
 def _mongo_match(actual, wanted):
     if not isinstance(wanted, dict):
@@ -229,6 +303,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route(self, data=None):
         path = self.path.split("?", 1)[0]
+        query = parse_qs(urlparse(self.path).query)
         if path == "/":
             return 200, "text/html", SPA_HTML
         if path == "/login":
@@ -255,6 +330,77 @@ class Handler(BaseHTTPRequestHandler):
             if "mode=leak" in self.path:
                 return 200, "application/json", FORGOT_PASSWORD_LEAK
             return 200, "application/json", FORGOT_PASSWORD_PUBLIC
+        if path == "/api/auth/magic-link/request" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            email = str(data.get("email", "")).lower()
+            if email == "rate@acme.test":
+                return 429, "application/json", b'{"error":"Too many requests."}'
+            if email == "gateway@acme.test":
+                return 502, "text/plain", b"bad gateway"
+            if email in AUTH_USERS:
+                _new_auth_token(email)
+            return 303, "text/plain", b"", {"Location": "/login?sent=1"}
+        if path == "/api/auth/inbox" and self.command == "GET":
+            with AUTH_LOCK:
+                body = _json.dumps({"messages": list(AUTH_MESSAGES)}).encode()
+            return 200, "application/json", body
+        if path == "/api/auth/register" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            email = str(data.get("email", "")).lower()
+            user = AUTH_USERS.get(email)
+            if user:
+                token = str(data.get("code", ""))
+                record = AUTH_TOKENS.get(token)
+                if (not user["claimed"] and record and not record["consumed"]
+                        and record["email"] == email and data.get("password")):
+                    user["password"] = str(data["password"])
+                    user["claimed"] = True
+                    return 303, "text/plain", b"", {"Location": "/login?pending=1"}
+                return 303, "text/plain", b"", {
+                    "Location": "/register?error=account_already_exists"
+                }
+            return 303, "text/plain", b"", {"Location": "/dashboard"}
+        if path == "/api/auth/magic-link/verify" and self.command == "GET":
+            token = (query.get("token") or [""])[0]
+            record = AUTH_TOKENS.get(token)
+            if not record or record["consumed"]:
+                return 400, "application/json", b'{"error":"invalid token"}'
+            user = AUTH_USERS[record["email"]]
+            # Intended redemption also activates the identity. If it happens before
+            # register+code, the vulnerable password-setting branch is gone.
+            user["claimed"] = True
+            user["verified"] = True
+            record["consumed"] = True
+            session_id = _new_auth_session(record["email"], "magiclink")
+            return 303, "text/plain", b"", {
+                "Location": "/dashboard",
+                "Set-Cookie": "fixture_session=%s; Path=/; HttpOnly" % session_id,
+            }
+        if path == "/api/auth/login" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            email = str(data.get("email", "")).lower()
+            user = AUTH_USERS.get(email)
+            if user and user.get("password") and data.get("password") == user["password"]:
+                session_id = _new_auth_session(email, "password")
+                return 303, "text/plain", b"", {
+                    "Location": "/dashboard",
+                    "Set-Cookie": "fixture_session=%s; Path=/; HttpOnly" % session_id,
+                }
+            return 303, "text/plain", b"", {
+                "Location": "/login?error=invalid_email_or_password"
+            }
+        if path == "/api/vault/breakglass" and self.command == "POST":
+            session_id = _cookie_value(self.headers.get("Cookie"), "fixture_session")
+            session = AUTH_SESSIONS.get(session_id)
+            if not session:
+                return 401, "application/json", b'{"error":"unauthenticated"}'
+            user = AUTH_USERS[session["email"]]
+            if not user["executive"]:
+                return 403, "application/json", b'{"error":"forbidden"}'
+            if session["method"] != "password":
+                return 403, "application/json", b'{"error":"step_up_required"}'
+            body = _json.dumps({"recovery_key": AUTH_FLAG}).encode()
+            return 200, "application/json", body
         if path.startswith("/api/vaults/"):
             # Auth-gated path parameter: every id 401s without a token, which is the
             # pre-auth state of a real API. A sweep must call this UNTESTED, never clean.
@@ -396,14 +542,31 @@ class Handler(BaseHTTPRequestHandler):
         data = None
         if length:
             raw = self.rfile.read(length)
-            try:
-                data = _json.loads(raw)
-            except (ValueError, UnicodeDecodeError):
-                data = None
-        status, ctype, body = self._route(data)
+            ctype = (self.headers.get("Content-Type") or "").lower()
+            if "application/json" in ctype:
+                try:
+                    data = _json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    data = None
+            elif "application/x-www-form-urlencoded" in ctype:
+                try:
+                    parsed = parse_qs(raw.decode(), keep_blank_values=True)
+                    data = {key: values[0] for key, values in parsed.items()}
+                except UnicodeDecodeError:
+                    data = None
+            else:
+                try:
+                    data = _json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    data = None
+        routed = self._route(data)
+        status, ctype, body = routed[:3]
+        extra_headers = routed[3] if len(routed) > 3 else {}
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        for key, value in extra_headers.items():
+            self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -433,6 +596,7 @@ class Handler(BaseHTTPRequestHandler):
 def start():
     """Bind an ephemeral port, serve in a background thread. Returns (server, base_url)."""
     import threading
+    _reset_auth_state()
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

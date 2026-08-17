@@ -45,7 +45,9 @@ HEADERS = {"User-Agent": UA, "Accept": "*/*"}
 FRAMEWORK_404 = re.compile(
     r'Cannot (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /', re.I)
 ACTION_PATH = re.compile(
-    r'/(?:[^/?#]+/)*(?:recover|reset|verify|forgot|search|filter|query|graphql|login|register|signup)'
+    r'/(?:[^/?#]+/)*(?:magic(?:-link)?|passwordless|inbox|outbox|emails?|mail|claim|'
+    r'activation|activate|enrollment|enroll|invite|callback|session|password|recover|reset|'
+    r'verify|forgot|search|filter|query|graphql|login|register|signup)'
     r'(?:[/?#-]|$)', re.I)
 GATEWAY_FAILURES = {502, 503, 504}
 

@@ -18,7 +18,9 @@ import sys
 PATH_CHARS = r"a-zA-Z0-9/_\-?=&.:{}$"
 STATIC_EXT = re.compile(r'\.(?:js|mjs|css|map|png|jpe?g|gif|svg|ico|woff2?|ttf|pdf|zip)(?:[?#]|$)', re.I)
 ACTION_ROUTE = re.compile(
-    r'/(?:[^/?#]+/)*(recover|reset|verify|forgot|search|filter|query|graphql|login|register|signup)'
+    r'/(?:[^/?#]+/)*(magic(?:-link)?|passwordless|inbox|outbox|emails?|mail|claim|'
+    r'activation|activate|enrollment|enroll|invite|callback|session|password|recover|reset|'
+    r'verify|forgot|search|filter|query|graphql|login|register|signup)'
     r'(?:[/?#-]|$)', re.I)
 VENDOR_BASENAME = re.compile(
     r'^(?:socket\.io|engine\.io|react(?:-dom)?|runtime|polyfills?|vendors?)(?:[.\-_]|$)', re.I)
@@ -529,7 +531,15 @@ def main():
         if not match:
             continue
         keyword = match.group(1).lower()
-        score = 100 if keyword in ("recover", "reset", "verify", "forgot") else 80
+        if keyword in ("inbox", "outbox", "email", "emails", "mail"):
+            score = 110
+        elif keyword in (
+                "magic", "magic-link", "passwordless", "claim", "activation", "activate",
+                "enrollment", "enroll", "invite", "password", "recover", "reset",
+                "verify", "forgot"):
+            score = 100
+        else:
+            score = 80
         if keyword in ("login", "register", "signup"):
             score = 60
         sources = ", ".join(sorted(provenance.get(line, [])))

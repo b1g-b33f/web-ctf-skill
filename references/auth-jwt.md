@@ -1,4 +1,43 @@
-# Auth — account access, JWT, password reset flows
+# Auth — lifecycle, first-use account claiming, JWT, password reset
+
+## 0. Authentication state census
+
+Before consuming a magic link, activation code, invitation, verification code, or reset token,
+map the flow as a state machine:
+
+- **Identity:** email/username, org, role, and whether IT or an invitation pre-provisioned it.
+- **Account state:** absent, invited, unclaimed, pending, active, disabled, or recovered.
+- **Artifact:** which endpoint issues the token, where it is disclosed, its lifetime, and whether
+  requesting or redeeming it changes account state.
+- **Consumers:** every endpoint and field that accepts token-shaped input — registration, claim,
+  activation, invite, password reset, verification, and login.
+- **Session property:** which identity, role/org membership, and authentication assurance the
+  resulting session actually carries. A gate such as `step_up_required` is a capability target,
+  not merely an error string.
+
+Words such as **first use**, **activate**, **claim**, **pre-provisioned**, **passwordless**, and
+**invited** trigger this census. Keep at least one seeded or privileged identity untouched as a
+reserve. Normal redemption is destructive evidence: it can activate or consume precisely the
+state needed for a cross-flow claim. Test the live artifact against registration/claim/activation
+fields first, then redeem it normally only if those probes miss. A negative result obtained after
+activation or token consumption clears only that later state, not the original flow.
+
+When you know a pre-provisioned identity and can obtain its auth artifact, run the bounded helper:
+
+```bash
+python3 ~/.claude/skills/web-ctf/scripts/authquick.py --base <target> \
+  --account 'executive@example.test=Executive Name' --password '<chosen-password>' \
+  --register-field 'username=<required-value>' --objective-path /api/protected/action
+```
+
+It requests an artifact, checks public dev inbox/mail endpoints, establishes an existing-account
+registration baseline, and tests a small token-field set against that flow **before** verification.
+On a strong transition it verifies if needed, proves persistent password login, and calls the
+optional objective. Add `--register-field key=value` for every required registration field and
+repeat `--account` to supply reserve/rotation identities. Evidence goes to `probes.jsonl` and a
+mode-0600 `auth-state.json`; exit 0 means a claim transition or flag, 2 means inconclusive or
+rate-limited, and 3 means a request/gateway circuit break. Generated auth values are scalar
+strings only: the helper never sends SQL/NoSQL operators or type-confusion payloads to auth fields.
 
 ## 1. Get an account
 

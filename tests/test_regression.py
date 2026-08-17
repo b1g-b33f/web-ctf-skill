@@ -66,6 +66,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from urllib.parse import parse_qs, urlparse
+
+import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fixture_app
@@ -146,6 +149,22 @@ class RegressionTest(unittest.TestCase):
                 methods = fh.read()
             self.assertRegex(methods, r'POST\s+/api/account/recover',
                              "POST-only action route was missed:\n" + proc.stdout)
+
+    def test_quickrecon_discovers_post_only_magic_link_endpoint(self):
+        """Magic-link routes are state-changing auth actions even when GET is
+        the SPA fallback, so safe method discovery must still try POST {}."""
+        with tempfile.TemporaryDirectory() as tmp:
+            methodfile = os.path.join(tmp, "methods.txt")
+            proc = run_full(
+                "quickrecon.py", "--base", self.base_url,
+                "--out", os.path.join(tmp, "probe"), "--discover-methods",
+                "--methodfile", methodfile, "--delay", "0", "--paths",
+                "api/auth/magic-link/request")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            with open(methodfile, encoding="utf-8") as fh:
+                methods = fh.read()
+            self.assertRegex(methods, r'POST\s+/api/auth/magic-link/request',
+                             "POST-only magic-link route was missed:\n" + proc.stdout)
 
     def test_jsharvest_extracts_methods_from_the_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -328,10 +347,13 @@ class RegressionTest(unittest.TestCase):
 
             quickcheck_hits = os.path.join(tmp, challenge, "recon", "quickcheck_hits.txt")
             with open(quickcheck_hits, encoding="utf-8") as fh:
-                self.assertIn("/api/stocks/search", fh.read(),
+                quick_hits = fh.read()
+                self.assertIn("/api/stocks/search", quick_hits,
                              "direct protected-leaf guess missing from quickcheck_hits.txt -- "
                              "recursive fuzzing alone cannot reach a leaf below an SPA-fallback "
                              "/api, so ctf-init.sh's quickcheck job must guess it directly")
+                self.assertIn("/api/auth/inbox", quick_hits,
+                              "public auth-artifact inbox missing from direct quickcheck guesses")
             self.assertNotIn("0\n0 hits", out,
                              "empty grep count printed two zeroes instead of one")
 
@@ -540,6 +562,25 @@ class JsmineSecretSentinelTest(unittest.TestCase):
             self.assertNotIn("DO_NOT_PASS_THIS_OR_YOU_WILL_BE_FIRED", body)
 
 
+class JsmineAuthLifecycleRankingTest(unittest.TestCase):
+    """Token sinks and first-use lifecycle routes must rank above ordinary
+    login/register calls instead of disappearing from the action section."""
+
+    def test_magic_claim_and_inbox_routes_are_ranked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "auth.js")
+            with open(source, "w", encoding="utf-8") as fh:
+                fh.write('a.post("/api/auth/magic-link/request", {});\n')
+                fh.write('a.post("/api/auth/claim", {});\n')
+                fh.write('a.get("/api/auth/inbox");\n')
+            proc = run_full("jsmine.py", source)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertRegex(
+                proc.stdout, r'score=100 POST\s+/api/auth/magic-link/request')
+            self.assertRegex(proc.stdout, r'score=100 POST\s+/api/auth/claim')
+            self.assertRegex(proc.stdout, r'score=110 GET\s+/api/auth/inbox')
+
+
 class ProbeSkippedWriteTest(unittest.TestCase):
     """PUT/PATCH/DELETE targets mutate state, so probe.py holds them back unless
     --write is passed. They must not vanish silently — an operator needs to see what
@@ -625,6 +666,106 @@ class ProbePublicAuthEnvelopeTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("NO-AUTH LEAK", proc.stdout)
             self.assertNotIn("public-endpoint — expected without auth", proc.stdout)
+
+
+class AuthquickRegressionTest(unittest.TestCase):
+    """Vaultly-008 required preserving an unclaimed seeded identity, reading a
+    magic token from a public inbox, trying that live artifact as registration
+    ``code`` before intended redemption, then proving persistent password login.
+    These tests make the state ordering, rate-limit handling, and full takeover
+    verification permanent harness behavior."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def setUp(self):
+        fixture_app._reset_auth_state()
+
+    def run_authquick(self, out, account, *extra):
+        return run_full(
+            "authquick.py", "--base", self.base_url,
+            "--account", account, "--password", "HarnessPass1!",
+            "--register-field", "orgName=Acme Executive Office",
+            "--inbox-path", "/api/auth/inbox", "--delay", "0",
+            "--max-probes", "12", "--out", out, *extra)
+
+    def test_cross_flow_claim_precedes_verify_and_reaches_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_authquick(
+                tmp, "maya.chen@acme.test=Maya Chen",
+                "--token-field", "token", "--token-field", "code",
+                "--login-field", "next=/dashboard",
+                "--objective-path", "/api/vault/breakglass",
+                "--objective-method", "POST")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("POSSIBLE ACCOUNT CLAIM field=code", proc.stdout)
+            self.assertIn("PERSISTENT PASSWORD LOGIN confirmed", proc.stdout)
+            expected = "bug" + "{AuthQuickRegression123}"
+            self.assertIn("FLAG " + expected, proc.stdout)
+
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            labels = [record["label"] for record in records]
+            self.assertLess(labels.index("register-field:code"), labels.index("verify-claim"))
+            self.assertLessEqual(len(records), 8, records)
+            for record in records:
+                request = record.get("request")
+                if isinstance(request, dict):
+                    self.assertTrue(all(isinstance(value, str) for value in request.values()))
+                    self.assertFalse(any(str(key).startswith("$") for key in request))
+
+            with open(os.path.join(tmp, "auth-state.json"), encoding="utf-8") as fh:
+                state = json.load(fh)
+            account = state["accounts"]["maya.chen@acme.test"]
+            self.assertEqual(account["state"], "objective-reached")
+            self.assertTrue(state["artifacts"][0]["consumed"])
+            self.assertIn(expected, state["flags"])
+
+    def test_normal_magic_redemption_burns_the_claim_state(self):
+        email = "sofia.garcia@acme.test"
+        requested = requests.post(
+            self.base_url + "/api/auth/magic-link/request", data={"email": email},
+            allow_redirects=False, timeout=5)
+        self.assertEqual(requested.status_code, 303)
+        messages = requests.get(
+            self.base_url + "/api/auth/inbox", timeout=5).json()["messages"]
+        link = [message["link"] for message in messages if message["to"] == email][-1]
+        token = parse_qs(urlparse(link).query)["token"][0]
+        redeemed = requests.get(
+            self.base_url + "/api/auth/magic-link/verify", params={"token": token},
+            allow_redirects=False, timeout=5)
+        self.assertEqual(redeemed.status_code, 303)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_authquick(
+                tmp, "sofia.garcia@acme.test=Sofia Garcia", "--token-field", "code")
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("no cross-flow account-claim transition", proc.stdout)
+            self.assertNotIn("PERSISTENT PASSWORD LOGIN", proc.stdout)
+
+    def test_rate_limit_is_untested_and_gateway_trips_circuit_breaker(self):
+        cases = (
+            ("rate@acme.test=Rate Limited", 2, "UNTESTED", "rate-limited"),
+            ("gateway@acme.test=Gateway Failure", 3, "CIRCUIT BREAKER", None),
+        )
+        for account, expected_code, marker, state_name in cases:
+            with self.subTest(account=account), tempfile.TemporaryDirectory() as tmp:
+                fixture_app._reset_auth_state()
+                proc = self.run_authquick(tmp, account, "--token-field", "code")
+                self.assertEqual(proc.returncode, expected_code, proc.stdout + proc.stderr)
+                self.assertIn(marker, proc.stdout)
+                with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                    self.assertEqual(sum(1 for line in fh if line.strip()), 1)
+                if state_name:
+                    email = account.split("=", 1)[0]
+                    with open(os.path.join(tmp, "auth-state.json"), encoding="utf-8") as fh:
+                        state = json.load(fh)
+                    self.assertEqual(state["accounts"][email]["state"], state_name)
 
 
 class ProbePrivilegeGapTest(unittest.TestCase):
