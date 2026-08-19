@@ -37,6 +37,9 @@ Routes:
                               undocumented caption="{value}" field; resubmitting that
                               response-only field expands safe context variables and
                               a synthetic high-value flag variable
+  *    /api/cmdi/*        -> DiceForge-shaped command-injection fixtures covering JSON,
+                              query, form, path, header, and raw multipart transports,
+                              plus reflection-only, invalid, rate-limit, and gateway controls
   *    /api/admin/*       -> Ottergram-shaped function-level authorization: a bearer
                               token whose value contains "admin" is the privileged
                               identity, any other token is low-priv, no token is 401.
@@ -59,6 +62,7 @@ import json as _json
 import re
 import sqlite3
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -108,6 +112,7 @@ LOGIN_HTML = (b'<html><body><form action="/api/auth/login" method="post">'
               b'<input name="email"></form></body></html>')
 APP_JS = b'''a.get("/api/data?limit=10");
 a.post("/api/submit", {});
+axios.post('/api/roll', { dice: dicePayload, rollOptions: 'none' });
 const LOG_ACTIVITY_MUTATION = `
   mutation LogActivity($event: String!, $userId: ID, $metadata: String) {
     logActivity(event: $event, userId: $userId, metadata: $metadata) {
@@ -205,6 +210,39 @@ NOSQL_DOCS = [
 ]
 
 TEMPLATE_FLAG = "bug" + "{example_template_variable_fixture}"
+CMDI_FLAG = "bug" + "{CmdiQuickRegression123}"
+CMDI_ID = "uid=1000(fixture) gid=1000(fixture) groups=1000(fixture)"
+
+
+def _cmdi_result(value):
+    """Simulate shell semantics without executing a real command in the test process."""
+    value = value if isinstance(value, str) else ""
+    whoami = re.search(r'(?:;|&|&&|\||\|\|)whoami(?:\s|$)', value)
+    if whoami:
+        return CMDI_FLAG
+    identity = re.search(r'(?:;|&&|\||\|\|)id(?:\s|$)', value)
+    if identity:
+        return CMDI_ID
+    marker = re.search(r';printf\s+(CMDIQ_[A-Z0-9]+)', value)
+    if not marker:
+        marker = re.search(r'&echo\s+(CMDIQ_[A-Z0-9]+)', value)
+    if marker:
+        return marker.group(1)
+    delay = re.search(r';sleep\s+(\d+)', value)
+    if delay:
+        time.sleep(min(int(delay.group(1)), 2))
+        return ""
+    return None
+
+
+def _cmdi_body(value, reflect=False, execute=True):
+    data = {"status": "ok"}
+    if reflect:
+        data["value"] = value
+    output = _cmdi_result(value) if execute else None
+    if output is not None:
+        data["output"] = output
+    return _json.dumps(data).encode()
 
 # Vaultly-shaped first-use account lifecycle. A magic token can be read from a
 # public inbox and is accepted as the undocumented ``code`` registration field
@@ -482,6 +520,53 @@ class Handler(BaseHTTPRequestHandler):
                 "formula": data.get("formula"), "value": 100, "caption": caption,
             }).encode()
             return 200, "application/json", body
+        if path == "/api/cmdi/json" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            if not isinstance(data.get("dice"), list) or not isinstance(data.get("rollOptions"), str):
+                return 400, "application/json", b'{"error":"dice and rollOptions are required"}'
+            return 200, "application/json", _cmdi_body(data["rollOptions"])
+        if path == "/api/cmdi/json-nested" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            wrapper = data.get("wrapper")
+            if not isinstance(wrapper, list) or not wrapper or not isinstance(wrapper[0], dict):
+                return 400, "application/json", b'{"error":"wrapper is required"}'
+            value = wrapper[0].get("rollOptions")
+            if not isinstance(value, str):
+                return 400, "application/json", b'{"error":"rollOptions is required"}'
+            return 200, "application/json", _cmdi_body(value)
+        if path == "/api/cmdi/safe" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            if not isinstance(data.get("rollOptions"), str):
+                return 400, "application/json", b'{"error":"rollOptions is required"}'
+            return 200, "application/json", _cmdi_body(
+                data["rollOptions"], reflect=True, execute=False)
+        if path == "/api/cmdi/blind" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            value = data.get("rollOptions", "")
+            delay = re.search(r';sleep\s+(\d+)', value) if isinstance(value, str) else None
+            if delay:
+                time.sleep(min(int(delay.group(1)), 2))
+            return 200, "application/json", _cmdi_body(value, execute=False)
+        if path == "/api/cmdi/query" and self.command == "GET":
+            value = (query.get("host") or [""])[0]
+            return 200, "application/json", _cmdi_body(value)
+        if path == "/api/cmdi/form" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            return 200, "application/json", _cmdi_body(data.get("host", ""))
+        if path.startswith("/api/cmdi/path/") and self.command == "GET":
+            value = unquote(path[len("/api/cmdi/path/"):])
+            return 200, "application/json", _cmdi_body(value)
+        if path == "/api/cmdi/header" and self.command == "GET":
+            return 200, "application/json", _cmdi_body(self.headers.get("X-Diagnostic-Host", ""))
+        if path == "/api/cmdi/raw" and self.command == "POST":
+            raw = getattr(self, "_raw_body", b"").decode("latin-1", "replace")
+            filename = re.search(r'filename="([^"]+)"', raw)
+            value = filename.group(1) if filename else ""
+            return 200, "application/json", _cmdi_body(value)
+        if path == "/api/cmdi/rate" and self.command == "POST":
+            return 429, "application/json", b'{"error":"slow down"}'
+        if path == "/api/cmdi/gateway" and self.command == "POST":
+            return 502, "text/plain", b"bad gateway"
         if path == "/api/account/recover" and self.command == "POST":
             data = data if isinstance(data, dict) else {}
             matches = [doc for doc in NOSQL_DOCS
@@ -540,8 +625,10 @@ class Handler(BaseHTTPRequestHandler):
         # hit this if the body isn't drained here.
         length = int(self.headers.get("Content-Length", 0) or 0)
         data = None
+        self._raw_body = b""
         if length:
             raw = self.rfile.read(length)
+            self._raw_body = raw
             ctype = (self.headers.get("Content-Type") or "").lower()
             if "application/json" in ctype:
                 try:

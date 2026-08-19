@@ -1,6 +1,6 @@
 ---
 name: web-ctf
-description: Web CTF and web-application lab methodology — recon, auth, endpoint probing, exploitation and flag extraction against a running web app, on any platform (HTB, BugForge, picoCTF, PortSwigger-style labs, self-hosted, or an unnamed target URL). Covers broken access control, injection, SSTI, path traversal and upload, SSRF, XSS with an admin bot, CORS, GraphQL, JWT and session flaws, business logic and race conditions, and anti-bot layers. Use when given a web target and asked to solve it, test it, or find the flag. Not for crypto, pwn, forensics or reversing.
+description: Web CTF and web-application lab methodology — recon, auth, endpoint probing, exploitation and flag extraction against a running web app, on any platform (HTB, BugForge, picoCTF, PortSwigger-style labs, self-hosted, or an unnamed target URL). Covers broken access control, SQL/NoSQL/OS command injection, SSTI, path traversal and upload, SSRF, XSS with an admin bot, CORS, GraphQL, JWT and session flaws, business logic and race conditions, and anti-bot layers. Use when given a web target and asked to solve it, test it, or find the flag. Not for crypto, pwn, forensics or reversing.
 user-invocable: true
 ---
 
@@ -50,7 +50,9 @@ Two rules that repeatedly decide solves:
 2. **Launch recon in a retained execution session** — let the tool yield while it runs; do not
    detach it with `nohup ... &` → `references/web-recon.md`. `ctf-init.sh`
    mines JS and calibrates the SPA-fallback signature *before* backgrounding anything else, so
-   `recon/methods.txt` exists by step 3 — check it before hand-mining.
+   `recon/methods.txt` exists by step 3 — check it before hand-mining. It also writes
+   `recon/cmdi-signals.txt` when direct request construction exposes command-shaped JSON/query/
+   form/path/header/multipart fields; these are candidates, not findings.
 2b. **Identity check** (skip if you keep no notes vault) — as soon as the app names itself (page
    `<title>`, header, slug), search vault *filenames* for its shortest distinctive **stem**
    (`*cafe*`, not `*cafeclub*` — spacing varies):
@@ -135,6 +137,7 @@ result. Record it and leave, don't re-derive bigger versions of the same number.
 |---|---|
 | JWT/session cookie; reset flow/login oracle; magic/passwordless login; activation/claim/invite; public inbox/outbox; seeded account; first-use or step-up gate | `references/auth-jwt.md` |
 | Numeric/UUID ids in responses; `role`/`isAdmin`/`permissions` fields; 401/403 endpoints; **privileged creds handed to you**; an admin panel whose buttons fire write verbs | `references/access-control.md` |
+| Scalar request field shaped like `command`/`cmd`/`args`/`options`/`flags`/`host`/`ip`/`domain`/`filename`/`path`/`binary`/`tool`; system-backed diagnostic/conversion/export/archive feature; process output or shell errors; `recon/cmdi-signals.txt` non-empty | `references/command-injection.md` |
 | Search/filter/id param; **any `{...}` path segment — a REST id is an injection point, and a quote proves nothing there**; DB error on odd input; Mongo/mongoose in use | `references/injection.md` |
 | Input echoed into a rendered page/document; **a valid JSON response adds a response-only placeholder field such as `caption:"{value}"`** | `references/ssti.md` |
 | Filename or path parameter; file upload accepting a filename | `references/traversal-upload.md` |
@@ -219,6 +222,14 @@ python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <ta
 # wrappers, forms, provenance, full GraphQL operations/identity signals, ranked action routes,
 # comments, and narrative hints
 python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<name>/recon/
+
+# a command-shaped field is a lead, not proof. Preserve one known-valid request and
+# mutate exactly one JSON/query/form/path/header/raw-request location; raw mode covers
+# multipart filenames, cookies, duplicate params, and nonstandard encodings.
+python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+  --url "<target>/api/roll" --method POST \
+  --json '{"dice":[{"type":"d100","count":1}],"rollOptions":"none"}' \
+  --field rollOptions --out recon/cmdiquick
 
 # bounded read-only GraphQL fast track: anonymous/auth reachability, introspection, then
 # validation-error schema oracle + high-value Query fields when introspection is disabled

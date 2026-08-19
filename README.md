@@ -25,7 +25,7 @@ different shape, not a superset of this one.
 
 ```
 SKILL.md            ~6.2k tokens, always loaded: routing + order of operations
-references/*.md     15 files, loaded one at a time when a signal fires
+references/*.md     16 files, loaded one at a time when a signal fires
 scripts/*.py        real tooling (env-overridable paths — portable as-is)
 ```
 
@@ -55,7 +55,8 @@ browser and exfiltrate to a listener you control.
 | `jwtquick.py` | The whole cheap JWT surface in one ~1s foreground call: decode, dictionary-crack the HS256 secret (104k JWT-specific secrets, 0.8s worst case), mint `alg:none` ×4 plus privilege-escalated and id-swapped forgeries, fire them all at a route that refuses you, scan status/headers/body for a flag. Emits a re-sign-only control so a win is attributable to escalation rather than to re-signing. Tags each candidate `rejected` / `POSSIBLE BYPASS` / `FLAG` off exact status+body, never off a reworded rejection message |
 | `graphqlquick.py` | Bounded post-auth, read-only GraphQL fast track: anonymous/auth reachability, Query introspection, validation-error schema oracle when introspection is disabled, ID `1`/self checks, independent sensitive-field probes, header/body flag scanning, and hard stops on a flag, rate limit, gateway failure, or request budget. Never generates mutations |
 | `templatequick.py` | Bounded response-only template-field fast track: start from one known-valid JSON request, detect a top-level placeholder field absent from that request, prove client control and harmless single-brace interpolation, then check a five-variable high-value set while scanning headers/body and retaining JSONL evidence |
-| `jsmine.py` | Bundles and rendered HTML → routes, direct calls, native `fetch`, discovered request wrappers, HTML form methods, and complete named GraphQL operations with roots, variables, identity signals, and provenance. Keeps probe-ready output annotation-free, then adds provenance and high-value action-route ranking; warns loudly when routes exist but no methods map |
+| `cmdiquick.py` | Bounded transport-independent OS command-injection fast track: preserve one known-valid request, mutate one explicit query/form/nested-JSON/path/header/raw-request location, require identity output or an execution-only marker rather than reflection, continue from `id` to `whoami`, and stop on flags, throttling, gateways, or budget. Raw request markers cover cookies, multipart fields/filenames, duplicate parameters, and nonstandard encodings; paired blind timing is explicit only |
+| `jsmine.py` | Bundles and rendered HTML → routes, direct calls, native `fetch`, discovered request wrappers, HTML form methods, command-injection-shaped JSON/query/form/path/header/multipart fields, and complete named GraphQL operations with roots, variables, identity signals, and provenance. Keeps probe-ready output annotation-free, then adds provenance and high-value action-route ranking; warns loudly when routes exist but no methods map |
 | `jsharvest.py` | Fetches pages and valid `<script src>` bundles plus source maps, quarantines literal JS/template hrefs and vendor bundles, rejects error/HTML bodies masquerading as JavaScript, runs `jsmine.py`, and writes `jsmine.txt`, `methods.txt`, `dynamic-links.txt`, and `source-provenance.tsv` |
 | `quickrecon.py` | SPA-fallback-aware existence check with optional action-route method fallback: calibrated GET/POST bodies, route-specific `Allow`, and safe `POST {}` validation probes. A 429 is inconclusive; gateway failures trip a circuit breaker |
 | `probe.py` | Every endpoint with auth **and** without, **per method**; calibrates the not-found body (and detects framework 404s) so status jitter can't hide routes; scans headers + bodies for flags. Verdicts: `not-a-route`, `auth-required`, `public-error` (same non-fallback error regardless of auth, on a status other than 401/403 — not a leak), `NO-AUTH LEAK`, `NO-AUTH DATA` |
@@ -78,6 +79,12 @@ python3 ~/.claude/skills/web-ctf/scripts/authquick.py --base <target> \
 python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
 python3 ~/.claude/skills/web-ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
+
+# known-valid request + one explicit location; see references/command-injection.md
+python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+  --url <target>/api/roll --method POST \
+  --json '{"dice":[{"type":"d100","count":1}],"rollOptions":"none"}' \
+  --field rollOptions --out recon/cmdiquick
 
 # run this in the same authenticated parallel burst as jwtquick.py when GraphQL is mapped
 python3 ~/.claude/skills/web-ctf/scripts/graphqlquick.py \

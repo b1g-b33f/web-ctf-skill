@@ -189,6 +189,16 @@ METHOD_COUNT=$(line_count "$RECON/methods.txt")
 ROUTE_COUNT=$(sed -n 's/^=== ROUTES (\([0-9][0-9]*\)) ===$/\1/p' "$RECON/jsmine.txt" 2>/dev/null | head -1)
 ROUTE_COUNT="${ROUTE_COUNT:-0}"
 echo "[*] JS harvest done — $METHOD_COUNT METHOD -> PATH entries ($RECON/methods.txt, $RECON/jsmine.txt)"
+awk '
+  /^=== COMMAND-INJECTION FIELD SIGNALS / { inside=1; next }
+  /^=== / { inside=0 }
+  inside && /^  / { sub(/^  /, ""); print }
+' "$RECON/jsmine.txt" 2>/dev/null > "$RECON/cmdi-signals.txt"
+if [[ -s "$RECON/cmdi-signals.txt" ]]; then
+  echo "[!] Command-injection-shaped request fields mined — candidates, not findings:"
+  sed 's/^/    /' "$RECON/cmdi-signals.txt"
+  echo "[!] Reconstruct one known-valid request, then run cmdiquick.py against one explicit location."
+fi
 awk 'toupper($1) == "POST" && tolower($2) ~ "(^|/)graphql($|[?/])" { print $2 }' \
   "$RECON/methods.txt" 2>/dev/null | sort -u > "$RECON/graphql-endpoints.txt"
 GRAPHQL_PATH=$(head -1 "$RECON/graphql-endpoints.txt" 2>/dev/null)
@@ -316,6 +326,16 @@ cat "$RECON/headers.txt" 2>/dev/null | grep -E "^(HTTP|Server|X-Powered|Set-Cook
 echo ""
 echo "── JS harvest — METHOD -> PATH (recon/methods.txt) ─────"
 cat "$RECON/methods.txt" 2>/dev/null || echo "  none"
+
+if [[ -s "$RECON/cmdi-signals.txt" ]]; then
+  echo ""
+  echo "── Command-injection field signals (recon/cmdi-signals.txt) ──"
+  cat "$RECON/cmdi-signals.txt"
+  echo "  Candidate only: do not spray malformed requests. Preserve a known-valid baseline."
+  echo "  JSON: python3 $SCRIPT_DIR/cmdiquick.py --url <full-url> --method POST --json '<valid-body>' --field <field> --out $RECON/cmdiquick"
+  echo "  Form: python3 $SCRIPT_DIR/cmdiquick.py --url <full-url> --method POST --form '<valid-body>' --field <field> --out $RECON/cmdiquick"
+  echo "  Other: use --param, --path-marker, --inject-header, or --request-file/--marker."
+fi
 
 AUTH_LIFECYCLE_RE='magic|passwordless|inbox|outbox|claim|activat|enroll|invite|/api/(email|emails|mail)([/?[:space:]]|$)'
 {

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+from urllib.parse import parse_qsl
 
 PATH_CHARS = r"a-zA-Z0-9/_\-?=&.:{}$"
 STATIC_EXT = re.compile(r'\.(?:js|mjs|css|map|png|jpe?g|gif|svg|ico|woff2?|ttf|pdf|zip)(?:[?#]|$)', re.I)
@@ -22,6 +23,10 @@ ACTION_ROUTE = re.compile(
     r'activation|activate|enrollment|enroll|invite|callback|session|password|recover|reset|'
     r'verify|forgot|search|filter|query|graphql|login|register|signup)'
     r'(?:[/?#-]|$)', re.I)
+CMDI_FIELD = re.compile(
+    r'(?:^|_)(?:cmd|command|exec|execute|shell|arg|args|option|options|flag|flags|'
+    r'host|hostname|ip|domain|filename|file_path|filepath|path|binary|program|tool|'
+    r'address|target)(?:$|_)', re.I)
 VENDOR_BASENAME = re.compile(
     r'^(?:socket\.io|engine\.io|react(?:-dom)?|runtime|polyfills?|vendors?)(?:[.\-_]|$)', re.I)
 VENDOR_SOURCE = re.compile(
@@ -166,6 +171,197 @@ def object_property(expr, name):
     m = re.search(r'(?:^|[,{}])\s*["\']?%s["\']?\s*:\s*(["\'`])(.+?)\1'
                   % re.escape(name), expr, re.I | re.S)
     return m.group(2).strip() if m else None
+
+
+def split_top_level(expr, delimiter=","):
+    """Split JavaScript text on a delimiter while respecting quotes and nesting."""
+    items, buf, stack = [], [], []
+    quote_char, escaped = None, False
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    for char in expr:
+        if quote_char:
+            buf.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote_char:
+                quote_char = None
+            continue
+        if char in "'\"`":
+            quote_char = char
+            buf.append(char)
+        elif char in pairs:
+            stack.append(pairs[char])
+            buf.append(char)
+        elif stack and char == stack[-1]:
+            stack.pop()
+            buf.append(char)
+        elif char == delimiter and not stack:
+            items.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(char)
+    if buf or items:
+        items.append("".join(buf).strip())
+    return [item for item in items if item]
+
+
+def object_properties(expr):
+    """Return top-level ``(name, value-expression)`` pairs from an object literal."""
+    expr = expr.strip()
+    if not (expr.startswith("{") and expr.endswith("}")):
+        return []
+    properties = []
+    for item in split_top_level(expr[1:-1]):
+        match = re.match(
+            r'\s*(?:([A-Za-z_$][\w$]*)|["\']([^"\']+)["\'])\s*:\s*(.*)\Z',
+            item, re.S)
+        if match:
+            properties.append((match.group(1) or match.group(2), match.group(3).strip()))
+            continue
+        shorthand = re.fullmatch(r'\s*([A-Za-z_$][\w$]*)\s*', item)
+        if shorthand:
+            properties.append((shorthand.group(1), shorthand.group(1)))
+    return properties
+
+
+def object_property_expr(expr, name):
+    for key, value in object_properties(expr):
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+def cmdi_shaped_field(name):
+    # Normalize camelCase before matching so DiceForge's ``rollOptions`` becomes
+    # ``roll_options`` while unrelated substrings such as ``relationship`` do not fire.
+    normalized = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name).replace("-", "_").lower()
+    return bool(CMDI_FIELD.search(normalized))
+
+
+def unwrap_constructor(expr, names):
+    pattern = r'(?:new\s+)?(?:%s)\s*\(' % "|".join(re.escape(name) for name in names)
+    match = re.match(pattern, expr.strip())
+    if not match:
+        return None
+    args = parse_call_args(expr.strip()[match.end():])
+    return args[0].strip() if args else None
+
+
+def cmdi_body_fields(expr, default_location="json"):
+    """Return ``(location, field, literal-seed-or-None)`` for a body expression."""
+    expr = expr.strip()
+    location = default_location
+    unwrapped = unwrap_constructor(expr, ("JSON.stringify",))
+    if unwrapped is not None:
+        expr = unwrapped
+        location = "json"
+    else:
+        unwrapped = unwrap_constructor(expr, ("URLSearchParams",))
+        if unwrapped is not None:
+            expr = unwrapped
+            location = "form"
+    fields = []
+    for name, value in object_properties(expr):
+        if not cmdi_shaped_field(name):
+            continue
+        fields.append((location, name, literal_string(value)))
+    return fields
+
+
+def format_cmdi_signal(method, route, location, field, seed=None):
+    rendered_seed = json.dumps(seed) if seed is not None else "<dynamic>"
+    return ("%-6s %s location=%s field=%s seed=%s" %
+            (method, route, location, field, rendered_seed))
+
+
+def extract_cmdi_signals(js, wrapper_names):
+    """Mine command-shaped fields from direct request construction call sites.
+
+    This is a prioritization signal, never a vulnerability claim. It deliberately
+    requires a route and a field from the same call when possible; unresolved
+    FormData/URLSearchParams append sites are retained as UNKNOWN provenance leads.
+    """
+    signals = []
+    call = re.compile(r'(?<![\w$])((?:[A-Za-z_$][\w$]*\.)*([A-Za-z_$][\w$]*))\s*\(')
+    for match in call.finditer(js):
+        full_name, terminal = match.group(1), match.group(2)
+        lower_terminal = terminal.lower()
+        direct_method = lower_terminal.upper() if lower_terminal in (
+            "get", "post", "put", "patch", "delete") else None
+        is_request = (direct_method is not None or terminal in wrapper_names
+                      or full_name == "axios.request")
+        if not is_request:
+            continue
+        args = parse_call_args(js[match.end():])
+        if not args:
+            continue
+        route = route_from_expr(args[0])
+        options = ""
+        body_expr = None
+        method = direct_method or "GET"
+        if direct_method:
+            if method in ("POST", "PUT", "PATCH") and len(args) > 1:
+                body_expr = args[1]
+            if len(args) > 2:
+                options = args[2]
+        else:
+            options = args[1] if len(args) > 1 else ""
+            if route is None and args[0].lstrip().startswith("{"):
+                raw_url = object_property(args[0], "url")
+                route = template_route(raw_url) if raw_url else None
+                options = args[0]
+            raw_method = object_property(options, "method")
+            method = raw_method.upper() if raw_method else "GET"
+            body_expr = object_property_expr(options, "body")
+        if not route or not route.startswith("/") or STATIC_EXT.search(route):
+            continue
+
+        # Query parameters are transport-independent and may appear on any method.
+        parsed = route.split("?", 1)
+        if len(parsed) == 2:
+            for key, value in parse_qsl(parsed[1], keep_blank_values=True):
+                if cmdi_shaped_field(key):
+                    signals.append(format_cmdi_signal(method, route, "query", key, value))
+
+        for variable in re.findall(r'\$\{\s*([A-Za-z_$][\w$]*)\s*\}', args[0]):
+            if cmdi_shaped_field(variable):
+                signals.append(format_cmdi_signal(method, route, "path", variable))
+
+        if body_expr:
+            for location, field, seed in cmdi_body_fields(body_expr):
+                signals.append(format_cmdi_signal(method, route, location, field, seed))
+
+        header_expr = object_property_expr(options, "headers") if options else None
+        for name, value in object_properties(header_expr or ""):
+            if cmdi_shaped_field(name):
+                signals.append(format_cmdi_signal(
+                    method, route, "header", name, literal_string(value)))
+
+    # Rendered forms provide a route and encoding even without JavaScript.
+    for form in re.findall(r'<form\b[^>]*>.*?</form\s*>', js, re.I | re.S):
+        open_tag = form[:form.find(">") + 1]
+        attrs = dict((key.lower(), value) for key, _, value in re.findall(
+            r'([:\w-]+)\s*=\s*(["\'])(.*?)\2', open_tag, re.I | re.S))
+        route = attrs.get("action", "")
+        if not route.startswith("/"):
+            continue
+        method = attrs.get("method", "GET").upper()
+        enctype = attrs.get("enctype", "application/x-www-form-urlencoded").lower()
+        location = "multipart" if "multipart/form-data" in enctype else "form"
+        for name in re.findall(r'\bname\s*=\s*["\']([^"\']+)["\']', form, re.I):
+            if cmdi_shaped_field(name):
+                signals.append(format_cmdi_signal(method, route, location, name))
+
+    # Keep unresolved programmatic form/query construction visible as a lead.
+    for constructor, field in re.findall(
+            r'\b(FormData|URLSearchParams)\s*\.\s*(?:append|set)\s*\(\s*["\']([^"\']+)',
+            js, re.I):
+        if cmdi_shaped_field(field):
+            location = "multipart" if constructor.lower() == "formdata" else "form"
+            signals.append(format_cmdi_signal("UNKNOWN", "<unresolved>", location, field))
+    return signals
 
 
 def discover_request_wrappers(js):
@@ -524,6 +720,13 @@ def main():
     provenance_lines = ["%s [%s; high]" % (line, ", ".join(sorted(paths)))
                         for line, paths in provenance.items()]
     section("METHOD PROVENANCE", provenance_lines)
+
+    cmdi_signals = []
+    for filename, blob in blobs:
+        label = source_label(filename).replace("\\", "/")
+        cmdi_signals.extend("%s [source=%s]" % (signal, label)
+                            for signal in extract_cmdi_signals(blob, wrapper_names))
+    section("COMMAND-INJECTION FIELD SIGNALS", cmdi_signals, width=600)
 
     high_value = []
     for line in sorted(set(method_lines)):

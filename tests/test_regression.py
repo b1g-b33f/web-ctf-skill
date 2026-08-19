@@ -302,6 +302,13 @@ class RegressionTest(unittest.TestCase):
                 self.assertEqual(fh.read().strip(), "/api/graphql")
             self.assertIn("GraphQL route mapped: /api/graphql", out)
             self.assertIn("graphqlquick.py --url", out)
+            cmdi_signals = os.path.join(workdir, "recon", "cmdi-signals.txt")
+            with open(cmdi_signals, encoding="utf-8") as fh:
+                signals = fh.read()
+            self.assertIn(
+                'POST   /api/roll location=json field=rollOptions seed="none"', signals)
+            self.assertIn("Command-injection-shaped request fields mined", out)
+            self.assertIn("cmdiquick.py --url", out)
 
     def test_ctf_init_captures_ferox_progress_in_ferox_log(self):
         """feroxbuster's own -q/--silent flags still leave a startup banner and
@@ -579,6 +586,48 @@ class JsmineAuthLifecycleRankingTest(unittest.TestCase):
                 proc.stdout, r'score=100 POST\s+/api/auth/magic-link/request')
             self.assertRegex(proc.stdout, r'score=100 POST\s+/api/auth/claim')
             self.assertRegex(proc.stdout, r'score=110 GET\s+/api/auth/inbox')
+
+
+class JsmineCommandInjectionSignalsTest(unittest.TestCase):
+    """The DiceForge field was visible in a direct axios body but the old miner
+    emitted only method/path. Transport-specific field signals must retain the
+    route, location, literal seed when available, and source provenance without
+    claiming that the candidate is already vulnerable."""
+
+    def test_json_query_form_header_path_and_multipart_candidates_are_ranked(self):
+        source_text = r'''
+axios.post('/api/roll', { dice: dicePayload, rollOptions: 'none' });
+fetch('/api/ping?host=localhost', { method: 'GET' });
+fetch(`/api/tools/${hostname}`, { method: 'GET', headers: { 'X-Diagnostic-Host': 'local' } });
+fetch('/api/check', { method: 'POST', body: new URLSearchParams({ host: 'localhost', mode: 'fast' }) });
+const markup = '<form action="/upload" method="post" enctype="multipart/form-data"><input name="filename"></form>';
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "DiceRoller.js")
+            with open(source, "w", encoding="utf-8") as fh:
+                fh.write(source_text)
+            proc = run_full("jsmine.py", source)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            section = re.search(
+                r'=== COMMAND-INJECTION FIELD SIGNALS.*?(?=\n===|\Z)',
+                proc.stdout, re.S)
+            self.assertIsNotNone(section, proc.stdout)
+            body = section.group(0)
+            self.assertIn(
+                'POST   /api/roll location=json field=rollOptions seed="none"', body)
+            self.assertIn(
+                'GET    /api/ping?host=localhost location=query field=host seed="localhost"',
+                body)
+            self.assertIn(
+                'GET    /api/tools/{...} location=path field=hostname seed=<dynamic>', body)
+            self.assertIn(
+                'GET    /api/tools/{...} location=header field=X-Diagnostic-Host seed="local"',
+                body)
+            self.assertIn(
+                'POST   /api/check location=form field=host seed="localhost"', body)
+            self.assertIn(
+                'POST   /upload location=multipart field=filename seed=<dynamic>', body)
+            self.assertIn("source=DiceRoller.js", body)
 
 
 class ProbeSkippedWriteTest(unittest.TestCase):
@@ -1483,6 +1532,147 @@ class SqlquickSweepTest(unittest.TestCase):
     def test_sweep_ignores_routes_without_a_path_parameter(self):
         out = self.sweep("GET    /api/widgets\nPOST   /api/login\n")
         self.assertIn("nothing to sweep", out)
+
+
+class CmdiquickRegressionTest(unittest.TestCase):
+    """A command-shaped scalar may live in any HTTP transport. The helper must
+    preserve a valid request, mutate one explicit location, require strong output
+    evidence, continue from ``id`` to ``whoami`` for the flag, and never turn a
+    reflection, invalid baseline, throttle, or gateway failure into a finding."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def run_cmdi(self, *args, out=None, timeout=30):
+        command = list(args) + ["--delay", "0"]
+        if out is not None:
+            command += ["--out", out]
+            return run_full("cmdiquick.py", *command, timeout=timeout)
+        with tempfile.TemporaryDirectory() as tmp:
+            command += ["--out", tmp]
+            return run_full("cmdiquick.py", *command, timeout=timeout)
+
+    def assert_confirmed(self, proc, location):
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("INJECTABLE " + location, proc.stdout)
+        expected = "bug" + "{CmdiQuickRegression123}"
+        self.assertIn("FLAG " + expected, proc.stdout)
+
+    def test_diceforge_json_reaches_flag_in_three_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_cmdi(
+                "--url", self.base_url + "/api/cmdi/json",
+                "--json", '{"dice":[{"type":"d100","count":1}],"rollOptions":"none"}',
+                "--field", "rollOptions", out=tmp)
+            self.assert_confirmed(proc, "json:rollOptions")
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual([record["label"] for record in records],
+                             ["baseline", "posix-id", "posix-whoami"])
+
+    def test_nested_json_path_is_mutated_without_changing_siblings(self):
+        proc = self.run_cmdi(
+            "--url", self.base_url + "/api/cmdi/json-nested",
+            "--json", '{"wrapper":[{"rollOptions":"none","keep":"same"}]}',
+            "--field", "wrapper[0].rollOptions")
+        self.assert_confirmed(proc, "json:wrapper[0].rollOptions")
+
+    def test_query_form_path_header_and_raw_multipart_transports(self):
+        cases = [
+            ("query:host", ["--url", self.base_url + "/api/cmdi/query?host=localhost",
+                            "--param", "host"]),
+            ("form:host", ["--url", self.base_url + "/api/cmdi/form",
+                           "--form", "host=localhost&mode=fast", "--field", "host"]),
+            ("path:*", ["--url", self.base_url + "/api/cmdi/path/*",
+                        "--path-marker", "*", "--seed", "localhost"]),
+            ("header:X-Diagnostic-Host", ["--url", self.base_url + "/api/cmdi/header",
+                                          "--header", "X-Diagnostic-Host: localhost",
+                                          "--inject-header", "X-Diagnostic-Host"]),
+        ]
+        for location, args in cases:
+            with self.subTest(location=location):
+                self.assert_confirmed(self.run_cmdi(*args), location)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            request_path = os.path.join(tmp, "multipart.request")
+            body = (
+                "POST /api/cmdi/raw HTTP/1.1\r\n"
+                "Host: ignored.example\r\n"
+                "Content-Type: multipart/form-data; boundary=cmdiquick\r\n"
+                "\r\n"
+                "--cmdiquick\r\n"
+                "Content-Disposition: form-data; name=\"upload\"; filename=\"CMDI_INJECT\"\r\n"
+                "Content-Type: text/plain\r\n\r\nfixture\r\n--cmdiquick--\r\n"
+            )
+            with open(request_path, "wb") as fh:
+                fh.write(body.encode("latin-1"))
+            proc = self.run_cmdi(
+                "--url", self.base_url, "--request-file", request_path,
+                "--marker", "CMDI_INJECT", "--seed", "report.txt")
+            self.assert_confirmed(proc, "raw:CMDI_INJECT")
+
+    def test_reflection_only_endpoint_is_inconclusive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_cmdi(
+                "--url", self.base_url + "/api/cmdi/safe",
+                "--json", '{"rollOptions":"none"}', "--field", "rollOptions", out=tmp)
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertNotIn("INJECTABLE", proc.stdout)
+            self.assertIn("no strong command-execution differential", proc.stdout)
+
+    def test_invalid_baseline_rate_limit_and_gateway_stop_immediately(self):
+        cases = [
+            (["--url", self.base_url + "/api/cmdi/json", "--json", '{}',
+              "--field", "rollOptions"], 4, "JSON field path does not exist", 0),
+            (["--url", self.base_url + "/api/cmdi/json", "--json", '{"rollOptions":"none"}',
+              "--field", "rollOptions"], 2, "known-valid baseline", 1),
+            (["--url", self.base_url + "/api/cmdi/rate", "--json", '{"value":"none"}',
+              "--field", "value"], 2, "429 rate limit", 1),
+            (["--url", self.base_url + "/api/cmdi/gateway", "--json", '{"value":"none"}',
+              "--field", "value"], 3, "CIRCUIT BREAKER", 1),
+        ]
+        for args, code, marker, expected_records in cases:
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as tmp:
+                proc = self.run_cmdi(*args, out=tmp)
+                self.assertEqual(proc.returncode, code, proc.stdout + proc.stderr)
+                self.assertIn(marker, proc.stdout + proc.stderr)
+                log_path = os.path.join(tmp, "probes.jsonl")
+                count = 0
+                if os.path.exists(log_path):
+                    with open(log_path, encoding="utf-8") as fh:
+                        count = sum(1 for line in fh if line.strip())
+                self.assertEqual(count, expected_records)
+
+    def test_blind_timing_requires_explicit_option_and_paired_differential(self):
+        proc = self.run_cmdi(
+            "--url", self.base_url + "/api/cmdi/blind",
+            "--json", '{"rollOptions":"none"}', "--field", "rollOptions",
+            "--blind-time", "1", timeout=40)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("paired timing differential", proc.stdout)
+
+    def test_windows_marker_chain_and_probe_budget(self):
+        windows = self.run_cmdi(
+            "--url", self.base_url + "/api/cmdi/json",
+            "--json", '{"dice":[],"rollOptions":"none"}', "--field", "rollOptions",
+            "--os", "windows")
+        self.assert_confirmed(windows, "json:rollOptions")
+        self.assertIn("execution-only marker", windows.stdout)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            budget = self.run_cmdi(
+                "--url", self.base_url + "/api/cmdi/safe",
+                "--json", '{"rollOptions":"none"}', "--field", "rollOptions",
+                "--max-probes", "1", out=tmp)
+            self.assertEqual(budget.returncode, 2, budget.stdout + budget.stderr)
+            self.assertIn("probe budget reached (1)", budget.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                self.assertEqual(sum(1 for line in fh if line.strip()), 1)
 
 
 class TemplatequickRegressionTest(unittest.TestCase):
