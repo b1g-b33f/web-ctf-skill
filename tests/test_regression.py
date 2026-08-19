@@ -1625,6 +1625,13 @@ class CmdiquickRegressionTest(unittest.TestCase):
             self.assertNotIn("INJECTABLE", proc.stdout)
             self.assertIn("no strong command-execution differential", proc.stdout)
 
+        header = self.run_cmdi(
+            "--url", self.base_url + "/api/cmdi/header-safe",
+            "--header", "X-Diagnostic-Host: localhost",
+            "--inject-header", "X-Diagnostic-Host")
+        self.assertEqual(header.returncode, 2, header.stdout + header.stderr)
+        self.assertNotIn("CIRCUIT BREAKER", header.stdout)
+
     def test_invalid_baseline_rate_limit_and_gateway_stop_immediately(self):
         cases = [
             (["--url", self.base_url + "/api/cmdi/json", "--json", '{}',
@@ -1673,6 +1680,118 @@ class CmdiquickRegressionTest(unittest.TestCase):
             self.assertIn("probe budget reached (1)", budget.stdout)
             with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
                 self.assertEqual(sum(1 for line in fh if line.strip()), 1)
+            with open(os.path.join(tmp, "summary.json"), encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["status"], "UNTESTED_BUDGET")
+
+    def test_auto_retains_windows_and_powershell_winning_dialects(self):
+        cases = [
+            ("windows", "windows-ampersand-marker", "windows-whoami"),
+            ("powershell", "powershell-semicolon-marker", "powershell-whoami"),
+        ]
+        for route, marker_label, follow_label in cases:
+            with self.subTest(route=route), tempfile.TemporaryDirectory() as tmp:
+                proc = self.run_cmdi(
+                    "--url", self.base_url + "/api/cmdi/" + route,
+                    "--json", '{"rollOptions":"none"}', "--field", "rollOptions",
+                    out=tmp)
+                self.assert_confirmed(proc, "json:rollOptions")
+                with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                    records = [json.loads(line) for line in fh if line.strip()]
+                labels = [record["label"] for record in records]
+                self.assertIn(marker_label, labels)
+                self.assertEqual(labels[-1], follow_label)
+                self.assertEqual(records[-1]["dialect"], route)
+
+    def test_quote_breakout_reuses_exact_winning_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_cmdi(
+                "--url", self.base_url + "/api/cmdi/quote-posix",
+                "--json", '{"rollOptions":"none"}', "--field", "rollOptions",
+                "--os", "posix", out=tmp)
+            self.assert_confirmed(proc, "json:rollOptions")
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(records[-2]["wrapper"], "posix-single-quote")
+            self.assertEqual(records[-1]["wrapper"], "posix-single-quote")
+            self.assertIn("';whoami;#", records[-1]["mutation"])
+
+    def test_cookie_raw_body_duplicate_occurrence_and_non_2xx_baseline(self):
+        cases = [
+            ("cookie:target", [
+                "--url", self.base_url + "/api/cmdi/cookie",
+                "--cookie", "session=abc; target=localhost; mode=fast",
+                "--cookie-param", "target",
+            ]),
+            ("query:host[2]", [
+                "--url", self.base_url + "/api/cmdi/query-duplicate?host=safe&host=localhost",
+                "--param", "host", "--occurrence", "2",
+            ]),
+            ("json:rollOptions", [
+                "--url", self.base_url + "/api/cmdi/teapot", "--method", "POST",
+                "--json", '{"rollOptions":"none"}', "--field", "rollOptions",
+                "--baseline-status", "418",
+            ]),
+        ]
+        for location, args in cases:
+            with self.subTest(location=location):
+                self.assert_confirmed(self.run_cmdi(*args), location)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body_path = os.path.join(tmp, "request.xml")
+            with open(body_path, "w", encoding="utf-8") as fh:
+                fh.write("<request><host>CMDI_INJECT</host><mode>fast</mode></request>")
+            proc = self.run_cmdi(
+                "--url", self.base_url + "/api/cmdi/body", "--method", "POST",
+                "--body-file", body_path, "--marker", "CMDI_INJECT",
+                "--seed", "localhost", "--content-type", "application/xml")
+            self.assert_confirmed(proc, "body:CMDI_INJECT")
+
+    def test_all_dialect_timing_adapters(self):
+        for dialect in ("windows", "powershell"):
+            with self.subTest(dialect=dialect):
+                proc = self.run_cmdi(
+                    "--url", self.base_url + "/api/cmdi/blind-" + dialect,
+                    "--json", '{"rollOptions":"none"}', "--field", "rollOptions",
+                    "--os", dialect, "--blind-time", "1", timeout=40)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertIn(dialect, proc.stdout)
+                self.assertIn("paired timing differential", proc.stdout)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            substitution = self.run_cmdi(
+                "--url", self.base_url + "/api/cmdi/blind-substitution",
+                "--json", '{"rollOptions":"none"}', "--field", "rollOptions",
+                "--os", "posix", "--blind-time", "1", out=tmp, timeout=40)
+            self.assertEqual(
+                substitution.returncode, 0, substitution.stdout + substitution.stderr)
+            with open(os.path.join(tmp, "summary.json"), encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["wrapper"], "posix-dollar-substitution")
+
+    def test_explicit_oob_nonce_must_appear_in_collector_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "oob.log")
+            fixture_app.CMDI_OOB_LOG = log_path
+            try:
+                proc = self.run_cmdi(
+                    "--url", self.base_url + "/api/cmdi/oob",
+                    "--json", '{"rollOptions":"none"}', "--field", "rollOptions",
+                    "--os", "posix", "--oob-url", "https://callback.test/cmdi",
+                    "--oob-log", log_path, "--oob-wait", "0", out=tmp)
+            finally:
+                fixture_app.CMDI_OOB_LOG = None
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("verified OOB callback", proc.stdout)
+            with open(log_path, encoding="utf-8") as fh:
+                self.assertRegex(fh.read(), r'CMDIQ_[A-Z0-9]{12}')
+
+            missing_log = os.path.join(tmp, "no-callback.log")
+            negative = self.run_cmdi(
+                "--url", self.base_url + "/api/cmdi/safe",
+                "--json", '{"rollOptions":"none"}', "--field", "rollOptions",
+                "--os", "posix", "--oob-url", "https://callback.test/cmdi",
+                "--oob-log", missing_log, "--oob-wait", "0", out=tmp)
+            self.assertEqual(negative.returncode, 2, negative.stdout + negative.stderr)
+            self.assertNotIn("verified OOB callback", negative.stdout)
 
 
 class TemplatequickRegressionTest(unittest.TestCase):

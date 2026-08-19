@@ -334,7 +334,7 @@ if [[ -s "$RECON/cmdi-signals.txt" ]]; then
   echo "  Candidate only: do not spray malformed requests. Preserve a known-valid baseline."
   echo "  JSON: python3 $SCRIPT_DIR/cmdiquick.py --url <full-url> --method POST --json '<valid-body>' --field <field> --out $RECON/cmdiquick"
   echo "  Form: python3 $SCRIPT_DIR/cmdiquick.py --url <full-url> --method POST --form '<valid-body>' --field <field> --out $RECON/cmdiquick"
-  echo "  Other: use --param, --path-marker, --inject-header, or --request-file/--marker."
+  echo "  Other: use --param/--occurrence, --path-marker, --inject-header, --cookie-param, --body-file/--marker, or --request-file/--marker."
 fi
 
 AUTH_LIFECYCLE_RE='magic|passwordless|inbox|outbox|claim|activat|enroll|invite|/api/(email|emails|mail)([/?[:space:]]|$)'

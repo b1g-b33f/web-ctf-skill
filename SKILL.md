@@ -224,8 +224,9 @@ python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <ta
 python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<name>/recon/
 
 # a command-shaped field is a lead, not proof. Preserve one known-valid request and
-# mutate exactly one JSON/query/form/path/header/raw-request location; raw mode covers
-# multipart filenames, cookies, duplicate params, and nonstandard encodings.
+# mutate exactly one JSON/query/form/path/header/cookie/raw-body/raw-request location.
+# Auto mode distinguishes POSIX, cmd.exe, and PowerShell and reuses the winning
+# separator/quote context; timing and verified OOB callbacks are explicit options.
 python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
   --url "<target>/api/roll" --method POST \
   --json '{"dice":[{"type":"d100","count":1}],"rollOptions":"none"}' \

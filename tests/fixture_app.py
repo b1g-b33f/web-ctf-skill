@@ -212,26 +212,61 @@ NOSQL_DOCS = [
 TEMPLATE_FLAG = "bug" + "{example_template_variable_fixture}"
 CMDI_FLAG = "bug" + "{CmdiQuickRegression123}"
 CMDI_ID = "uid=1000(fixture) gid=1000(fixture) groups=1000(fixture)"
+CMDI_OOB_LOG = None
+
+
+def _cmdi_posix_result(value):
+    whoami = re.search(r'(?:;|&&|\||\|\||\n)whoami(?:\s|;|#|$)', value)
+    if whoami:
+        return CMDI_FLAG
+    identity = re.search(r'(?:;|&&|\||\|\||\n)id(?:\s|;|#|$)', value)
+    if identity:
+        return CMDI_ID
+    marker = re.search(r'(?:;|&&|\||\|\||\n)printf\s+%s\s+(CMDIQ_[A-Z0-9]+)', value)
+    if marker:
+        return marker.group(1)
+    delay = re.search(r'(?:;|&&|\||\|\||\n)sleep\s+(\d+)', value)
+    if delay:
+        time.sleep(min(int(delay.group(1)), 2))
+        return ""
+    return None
+
+
+def _cmdi_windows_result(value):
+    if re.search(r'ver>nul&&whoami(?:\s|&|$)', value, re.I):
+        return CMDI_FLAG
+    marker = re.search(r'ver>nul&&echo\s+(CMDIQ_[A-Z0-9]+)', value, re.I)
+    if marker:
+        return marker.group(1)
+    delay = re.search(r'ver>nul&&timeout\s+/t\s+(\d+)', value, re.I)
+    if delay:
+        time.sleep(min(int(delay.group(1)), 2))
+        return ""
+    return None
+
+
+def _cmdi_powershell_result(value):
+    if not re.search(r'if\(\$PSVersionTable\)\{', value, re.I):
+        return None
+    if re.search(r'\{whoami(?:\s|;|\}|$)', value, re.I):
+        return CMDI_FLAG
+    marker = re.search(r'Write-Output\s+(CMDIQ_[A-Z0-9]+)', value, re.I)
+    if marker:
+        return marker.group(1)
+    delay = re.search(r'Start-Sleep\s+-Seconds\s+(\d+)', value, re.I)
+    if delay:
+        time.sleep(min(int(delay.group(1)), 2))
+        return ""
+    return None
 
 
 def _cmdi_result(value):
     """Simulate shell semantics without executing a real command in the test process."""
     value = value if isinstance(value, str) else ""
-    whoami = re.search(r'(?:;|&|&&|\||\|\|)whoami(?:\s|$)', value)
-    if whoami:
-        return CMDI_FLAG
-    identity = re.search(r'(?:;|&&|\||\|\|)id(?:\s|$)', value)
-    if identity:
-        return CMDI_ID
-    marker = re.search(r';printf\s+(CMDIQ_[A-Z0-9]+)', value)
-    if not marker:
-        marker = re.search(r'&echo\s+(CMDIQ_[A-Z0-9]+)', value)
-    if marker:
-        return marker.group(1)
-    delay = re.search(r';sleep\s+(\d+)', value)
-    if delay:
-        time.sleep(min(int(delay.group(1)), 2))
-        return ""
+    for detector in (_cmdi_posix_result, _cmdi_windows_result, _cmdi_powershell_result):
+        output = detector(value)
+        if output is not None:
+            return output
     return None
 
 
@@ -547,8 +582,62 @@ class Handler(BaseHTTPRequestHandler):
             if delay:
                 time.sleep(min(int(delay.group(1)), 2))
             return 200, "application/json", _cmdi_body(value, execute=False)
+        if path == "/api/cmdi/blind-windows" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            value = data.get("rollOptions", "")
+            _cmdi_windows_result(value)
+            return 200, "application/json", _cmdi_body(value, execute=False)
+        if path == "/api/cmdi/blind-powershell" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            value = data.get("rollOptions", "")
+            _cmdi_powershell_result(value)
+            return 200, "application/json", _cmdi_body(value, execute=False)
+        if path == "/api/cmdi/blind-substitution" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            value = data.get("rollOptions", "")
+            delay = re.search(r'(?:\$\(|`)sleep\s+(\d+)(?:\)|`)', value)
+            if delay:
+                time.sleep(min(int(delay.group(1)), 2))
+            return 200, "application/json", _cmdi_body(value, execute=False)
+        if path == "/api/cmdi/windows" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            value = data.get("rollOptions", "")
+            output = _cmdi_windows_result(value)
+            body = {"status": "ok"}
+            if output is not None:
+                body["output"] = output
+            return 200, "application/json", _json.dumps(body).encode()
+        if path == "/api/cmdi/powershell" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            value = data.get("rollOptions", "")
+            output = _cmdi_powershell_result(value)
+            body = {"status": "ok"}
+            if output is not None:
+                body["output"] = output
+            return 200, "application/json", _json.dumps(body).encode()
+        if path == "/api/cmdi/quote-posix" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            value = data.get("rollOptions", "")
+            output = (_cmdi_posix_result(value)
+                      if re.search(r"(?:'|\");(?:printf|whoami)", value) else None)
+            body = {"status": "ok"}
+            if output is not None:
+                body["output"] = output
+            return 200, "application/json", _json.dumps(body).encode()
+        if path == "/api/cmdi/oob" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            value = data.get("rollOptions", "")
+            marker = re.search(r'https?://[^\s\'\"]+/(CMDIQ_[A-Z0-9]+)', value)
+            if marker and CMDI_OOB_LOG:
+                with open(CMDI_OOB_LOG, "a", encoding="utf-8") as fh:
+                    fh.write("HIT " + marker.group(1) + "\n")
+            return 200, "application/json", b'{"status":"queued"}'
         if path == "/api/cmdi/query" and self.command == "GET":
             value = (query.get("host") or [""])[0]
+            return 200, "application/json", _cmdi_body(value)
+        if path == "/api/cmdi/query-duplicate" and self.command == "GET":
+            values = query.get("host") or [""]
+            value = values[1] if len(values) > 1 else ""
             return 200, "application/json", _cmdi_body(value)
         if path == "/api/cmdi/form" and self.command == "POST":
             data = data if isinstance(data, dict) else {}
@@ -558,6 +647,17 @@ class Handler(BaseHTTPRequestHandler):
             return 200, "application/json", _cmdi_body(value)
         if path == "/api/cmdi/header" and self.command == "GET":
             return 200, "application/json", _cmdi_body(self.headers.get("X-Diagnostic-Host", ""))
+        if path == "/api/cmdi/header-safe" and self.command == "GET":
+            return 200, "application/json", _cmdi_body(
+                self.headers.get("X-Diagnostic-Host", ""), reflect=True, execute=False)
+        if path == "/api/cmdi/cookie" and self.command == "GET":
+            cookie = self.headers.get("Cookie", "")
+            match = re.search(r'(?:^|;\s*)target=([^;]*)', cookie)
+            return 200, "application/json", _cmdi_body(match.group(1) if match else "")
+        if path == "/api/cmdi/body" and self.command == "POST":
+            raw = getattr(self, "_raw_body", b"").decode("latin-1", "replace")
+            match = re.search(r'<host>(.*?)</host>', raw, re.S)
+            return 200, "application/json", _cmdi_body(match.group(1) if match else "")
         if path == "/api/cmdi/raw" and self.command == "POST":
             raw = getattr(self, "_raw_body", b"").decode("latin-1", "replace")
             filename = re.search(r'filename="([^"]+)"', raw)
@@ -567,6 +667,9 @@ class Handler(BaseHTTPRequestHandler):
             return 429, "application/json", b'{"error":"slow down"}'
         if path == "/api/cmdi/gateway" and self.command == "POST":
             return 502, "text/plain", b"bad gateway"
+        if path == "/api/cmdi/teapot" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            return 418, "application/json", _cmdi_body(data.get("rollOptions", ""))
         if path == "/api/account/recover" and self.command == "POST":
             data = data if isinstance(data, dict) else {}
             matches = [doc for doc in NOSQL_DOCS
