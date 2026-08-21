@@ -43,7 +43,7 @@ The methodology is app-first: read the application, establish real baselines, te
 and anonymous behavior, and follow the strongest live signal before reaching for broad scanners.
 
 ```text
-SKILL.md           ~7.3k tokens: workflow and signal routing
+SKILL.md           ~2.8k tokens: workflow and signal routing
 references/*.md    16 files: focused guidance loaded when needed
 scripts/           bounded helpers for repeatable recon and testing
 ```
