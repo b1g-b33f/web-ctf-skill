@@ -5,8 +5,8 @@ Whenever the challenge ships source — an HTB box download, a provided zip or r
 first:
 
 ```bash
-ls "~/Offsec/Web_CTF/Source Code/<challenge-name>/" 2>/dev/null || echo "no source"
-ls "~/Offsec/Web_CTF/Source Code/" | grep -i "<challenge-name>"   # zip names don't always match
+ls "$HOME/Offsec/Web_CTF/Source Code/<challenge-name>/" 2>/dev/null || echo "no source"
+ls "$HOME/Offsec/Web_CTF/Source Code/" | grep -i "<challenge-name>"   # zip names don't always match
 ```
 
 If source is found, read it immediately — it replaces most of the guesswork in recon/probing.
@@ -15,7 +15,7 @@ If source is found, read it immediately — it replaces most of the guesswork in
 
 **1. File tree** — structure before individual files:
 ```bash
-find "~/Offsec/Web_CTF/Source Code/<challenge-name>" -type f | sort
+find "$HOME/Offsec/Web_CTF/Source Code/<challenge-name>" -type f | sort
 ```
 
 **2. Entry point and routes** — `app.js`, `index.js`, `app.py`, `main.py`, `routes/`, `controllers/`:
@@ -26,20 +26,20 @@ find "~/Offsec/Web_CTF/Source Code/<challenge-name>" -type f | sort
 **3. Auth and JWT config:**
 ```bash
 grep -rE '(secret|SECRET|JWT_SECRET|SESSION_SECRET|key)\s*[=:]\s*["\x27][^"]{4,}' \
-  "~/Offsec/Web_CTF/Source Code/<challenge-name>/" 2>/dev/null
+  "$HOME/Offsec/Web_CTF/Source Code/<challenge-name>/" 2>/dev/null
 ```
 A hardcoded JWT secret → go straight to forging, skip cracking.
 
 **4. Flag location:**
 ```bash
-grep -rE '(flag|FLAG|HTB\{)' "~/Offsec/Web_CTF/Source Code/<challenge-name>/" 2>/dev/null | grep -v '.min.js'
+grep -rE '(flag|FLAG|HTB\{)' "$HOME/Offsec/Web_CTF/Source Code/<challenge-name>/" 2>/dev/null | grep -v '.min.js'
 ```
 Note the exact route and condition that returns it.
 
 **5. Dangerous sinks:**
 ```bash
 grep -rE '(exec|eval|system|popen|render_template_string|subprocess|child_process|fs\.read|path\.join|file\.save|move_uploaded_file|shutil\.move)' \
-  "~/Offsec/Web_CTF/Source Code/<challenge-name>/" 2>/dev/null
+  "$HOME/Offsec/Web_CTF/Source Code/<challenge-name>/" 2>/dev/null
 ```
 `file.save` / `move_uploaded_file` with an unsanitized filename → write traversal (`traversal-upload.md`).
 

@@ -30,6 +30,9 @@ Routes:
   GET  /api/stocks/search -> 401, JSON error body — a protected leaf nested below
                               /api, reachable only by direct guess since /api itself
                               is the SPA fallback
+  GET  /api/post/image    -> Ottergram-shaped file read: a known-valid PNG baseline,
+                              standard/four-dot/double-encoded traversal modes,
+                              body/header flags, and auth/rate/gateway controls
   POST /api/graphql       -> authenticated GraphQL endpoint with introspection disabled;
                               validation errors disclose user(id: ID!), whose password
                               field carries a synthetic regression flag
@@ -113,6 +116,7 @@ LOGIN_HTML = (b'<html><body><form action="/api/auth/login" method="post">'
 APP_JS = b'''a.get("/api/data?limit=10");
 a.post("/api/submit", {});
 axios.post('/api/roll', { dice: dicePayload, rollOptions: 'none' });
+const postImage = <img src={`/api/post/image?file=${post.image_url}`} />;
 const LOG_ACTIVITY_MUTATION = `
   mutation LogActivity($event: String!, $userId: ID, $metadata: String) {
     logActivity(event: $event, userId: $userId, metadata: $metadata) {
@@ -143,6 +147,11 @@ STYLED_DENIAL_HTML = (
     b'<p>You do not have permission to access this resource.</p></body></html>')
 CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE"
 GRAPHQL_FLAG = "bug" + "{GraphqlQuickRegression123}"
+LFI_FLAG = "bug" + "{LfiQuickRegression123}"
+LFI_HEADER_FLAG = "bug" + "{LfiQuickHeaderRegression123}"
+LFI_BASELINE = b"\x89PNG\r\n\x1a\nfixture-image"
+LFI_PASSWD = b"root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000::/home/user:/bin/sh\n"
+LFI_MISSING = b'{"error":"File not found"}'
 
 # Ottergram-shaped function-level authorization. Three routes under /api/admin
 # enforce the role; DELETE /api/admin/posts/1 only checks that *a* token exists,
@@ -395,6 +404,34 @@ class Handler(BaseHTTPRequestHandler):
             return 404, "text/plain", b"404 page not found"
         if path == "/json.js":
             return 200, "application/json", b'{"error":"not a bundle"}'
+        if path == "/api/post/image" and self.command == "GET":
+            file_value = (query.get("file") or [""])[0]
+            mode = (query.get("mode") or ["standard"])[0]
+            gate = (query.get("gate") or [""])[0]
+            if gate == "auth" and not self.headers.get("Authorization"):
+                return 401, "application/json", NO_TOKEN
+            if file_value == "/uploads/otter1.png":
+                return 200, "image/png", LFI_BASELINE
+            if mode == "rate":
+                return 429, "application/json", b'{"error":"slow down"}'
+            if mode == "gateway":
+                return 502, "text/plain", b"bad gateway"
+            if mode == "standard" and file_value == "../flag.txt":
+                return 200, "text/plain", LFI_FLAG.encode()
+            if mode == "header" and file_value == "../flag.txt":
+                return 200, "text/plain", b"read complete", {"X-Flag": LFI_HEADER_FLAG}
+            if mode in ("four-dot", "confirm-only"):
+                if file_value == "....//....//etc/passwd":
+                    return 200, "text/plain", LFI_PASSWD
+                if mode == "four-dot" and file_value == "....//....//flag.txt":
+                    return 200, "text/plain", LFI_FLAG.encode()
+            if mode == "double-encoded":
+                decoded_again = unquote(file_value)
+                if decoded_again == "../../etc/passwd":
+                    return 200, "text/plain", LFI_PASSWD
+                if decoded_again == "../../flag.txt":
+                    return 200, "text/plain", LFI_FLAG.encode()
+            return 404, "application/json", LFI_MISSING
         if path == "/api/data":
             return 401, "application/json", DATA_401
         if path == "/api/objects/1":

@@ -1,15 +1,14 @@
 ---
 name: web-ctf
 description: Web CTF and web-application lab methodology — recon, auth, endpoint probing, exploitation and flag extraction against a running web app, on any platform (HTB, BugForge, picoCTF, PortSwigger-style labs, self-hosted, or an unnamed target URL). Covers broken access control, SQL/NoSQL/OS command injection, SSTI, path traversal and upload, SSRF, XSS with an admin bot, CORS, GraphQL, JWT and session flaws, business logic and race conditions, and anti-bot layers. Use when given a web target and asked to solve it, test it, or find the flag. Not for crypto, pwn, forensics or reversing.
-user-invocable: true
 ---
 
-# /web-ctf — web CTF & web-app lab methodology
+# $web-ctf — web CTF & web-app lab methodology
 
 For challenges against a **running web application**, on any platform. Not a crypto/pwn/forensics/
 reversing playbook — if the target isn't a web app, this is the wrong file.
 
-Arguments: `$ARGUMENTS` → `/web-ctf [platform] <target> [challenge-name] [username] [password]`
+Arguments: `[platform] <target> [challenge-name] [username] [password]`
 
 - `platform` — optional, any name. Sets the expected flag wrapper: `htb` → `HTB{}`,
   `bugforge` → `bug{}`, `picoctf` → `picoCTF{}`, otherwise `flag{}` — and whatever the brief
@@ -52,7 +51,8 @@ Two rules that repeatedly decide solves:
    mines JS and calibrates the SPA-fallback signature *before* backgrounding anything else, so
    `recon/methods.txt` exists by step 3 — check it before hand-mining. It also writes
    `recon/cmdi-signals.txt` when direct request construction exposes command-shaped JSON/query/
-   form/path/header/multipart fields; these are candidates, not findings.
+   form/path/header/multipart fields, and `recon/lfi-signals.txt` when dynamic resource loads or
+   ordinary calls expose file-read-shaped query fields. These are candidates, not findings.
 2b. **Identity check** (skip if you keep no notes vault) — as soon as the app names itself (page
    `<title>`, header, slug), search vault *filenames* for its shortest distinctive **stem**
    (`*cafe*`, not `*cafeclub*` — spacing varies):
@@ -92,7 +92,7 @@ Two rules that repeatedly decide solves:
    ~4 requests each; the only check that catches a concatenated REST id, which no quote probe
    ever will → `references/injection.md`
    ```bash
-   python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --sweep --base <target> \
+   python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --sweep --base <target> \
      --methods recon/methods.txt --token "$TOKEN" --out recon/sqlisweep_auth
    ```
 6. **Probe every endpoint** — with auth, *without* auth, and as the throwaway low-priv account
@@ -140,7 +140,7 @@ result. Record it and leave, don't re-derive bigger versions of the same number.
 | Scalar request field shaped like `command`/`cmd`/`args`/`options`/`flags`/`host`/`ip`/`domain`/`filename`/`path`/`binary`/`tool`; system-backed diagnostic/conversion/export/archive feature; process output or shell errors; `recon/cmdi-signals.txt` non-empty | `references/command-injection.md` |
 | Search/filter/id param; **any `{...}` path segment — a REST id is an injection point, and a quote proves nothing there**; DB error on odd input; Mongo/mongoose in use | `references/injection.md` |
 | Input echoed into a rendered page/document; **a valid JSON response adds a response-only placeholder field such as `caption:"{value}"`** | `references/ssti.md` |
-| Filename or path parameter; file upload accepting a filename | `references/traversal-upload.md` |
+| Filename/path/template/download query field; dynamic `img`/`iframe`/`script`/`link` API resource; `recon/lfi-signals.txt` non-empty; file upload accepting a filename | `references/traversal-upload.md` |
 | `/graphql` endpoint or introspection available | `references/graphql.md` |
 | "Admin reviews your submission" workflow; **any param taking a URL** — import/fetch/callback/webhook/avatar-from-URL | `references/xss-ssrf.md` |
 | `Access-Control-Allow-Origin` on any response; `Vary: Origin`; app documents a widget/embed/sandbox/connected-app story; a `403` route no role you hold can reach | `references/cors.md` |
@@ -209,32 +209,39 @@ Use these instead of retyping one-liners — they encode fixes for mistakes that
 ```bash
 # bounded first-use/auth-artifact fast track. Run before normal token redemption;
 # generated auth payloads stay scalar and evidence lands under current/auth/.
-python3 ~/.claude/skills/web-ctf/scripts/authquick.py --base <target> \
+python3 ~/.codex/skills/web-ctf/scripts/authquick.py --base <target> \
   --account '<email>=<name>' --password '<chosen-password>' \
   --register-field '<required-key>=<value>' --objective-path '<protected-path>'
 
 # the whole cheap JWT surface, FOREGROUND: crack (JWT-specific list, then auto-escalates
 # to rockyou on a miss — ~1s typical, ~40s worst case) + alg:none + forge + fire at a
 # refusing route + scan headers/body for the flag. Run it the moment you hold a token.
-python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
+python3 ~/.codex/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
 # mine bundles/rendered HTML: direct calls, fetch(url,{method}), discovered request
 # wrappers, forms, provenance, full GraphQL operations/identity signals, ranked action routes,
 # comments, and narrative hints
-python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<name>/recon/
+python3 ~/.codex/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<name>/recon/
 
 # a command-shaped field is a lead, not proof. Preserve one known-valid request and
 # mutate exactly one JSON/query/form/path/header/cookie/raw-body/raw-request location.
 # Auto mode distinguishes POSIX, cmd.exe, and PowerShell and reuses the winning
 # separator/quote context; timing and verified OOB callbacks are explicit options.
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url "<target>/api/roll" --method POST \
   --json '{"dice":[{"type":"d100","count":1}],"rollOptions":"none"}' \
   --field rollOptions --out recon/cmdiquick
 
+# file-read-shaped query field: preserve a genuinely successful file URL, calibrate a
+# same-directory miss, test bounded traversal styles/depths, and reuse the exact winner.
+# With auth supplied, the baseline and winning read are also replayed anonymously.
+python3 ~/.codex/skills/web-ctf/scripts/lfiquick.py \
+  --url "<target>/api/post/image?file=/uploads/known.png" --param file \
+  --token "$TOKEN" --out recon/lfiquick
+
 # bounded read-only GraphQL fast track: anonymous/auth reachability, introspection, then
 # validation-error schema oracle + high-value Query fields when introspection is disabled
-python3 ~/.claude/skills/web-ctf/scripts/graphqlquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/graphqlquick.py \
   --url <target>/api/graphql --token "$TOKEN" --id "$YOUR_ID" --out recon/graphqlquick
 
 # ctf-init.sh already ran this pre-auth; re-run authenticated, apps sometimes
@@ -243,30 +250,30 @@ python3 ~/.claude/skills/web-ctf/scripts/graphqlquick.py \
 # the same file tree DevTools' Sources panel shows you, reconstructed to disk. A file
 # that "exists in the browser" but 404s/SPA-falls-back over direct HTTP is exactly this:
 # embedded in the map, never actually served — check recon/src/ before probing it as a URL.
-python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ \
+python3 ~/.codex/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ \
   --cookie-file <curl-cookie-jar> --page /dashboard --crawl-pages
 
 # probe every endpoint with auth AND without, auto-calibrating the not-found body
 # so status-code jitter can't hide real routes; scans headers + bodies for flags
-python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt
+python3 ~/.codex/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths paths.txt
 
 # three identities at once. Register a throwaway account and pass it as --lowpriv-token
 # whenever you hold privileged creds: a route the low-priv account reaches that its
 # siblings refuse is a missing function-level guard → references/access-control.md §C
-python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> \
+python3 ~/.codex/skills/web-ctf/scripts/probe.py --base <target> \
   --token "$TOKEN" --lowpriv-token "$LOWPRIV_TOKEN" --write --paths paths.txt
 
 # chain them — pipe the METHOD -> PATH section so POST routes are probed as POST
-python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
+python3 ~/.codex/skills/web-ctf/scripts/jsmine.py recon/ \
   | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
-  | python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths -
+  | python3 ~/.codex/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths -
 
 # low-volume SQLi fast-track — run this BEFORE sqlmap → references/injection.md §C
-python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
 
 # a valid evaluator/renderer response adds a top-level field like caption:"{value}":
 # prove the response-only field is controllable, then try harmless and high-value variables
-python3 ~/.claude/skills/web-ctf/scripts/templatequick.py \
+python3 ~/.codex/skills/web-ctf/scripts/templatequick.py \
   --url "<target>/api/forecast/indicator" --token "$TOKEN" \
   --data '{"stock_id":1,"formula":"10*10"}' --out recon/templatequick
 
@@ -274,28 +281,28 @@ python3 ~/.claude/skills/web-ctf/scripts/templatequick.py \
 # already swept these pre-auth; on an auth-gated API every id 401s then, so the sweep
 # reports UNTESTED and proves nothing until you re-run it WITH A TOKEN. Do that in the
 # same authenticated burst as jsharvest (~4 requests per position).
-python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --sweep --base <target> \
+python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --sweep --base <target> \
   --methods recon/methods.txt --token "$TOKEN" --out recon/sqlisweep_auth
 # then confirm + dump the position it names (--path-param injects the last segment):
-python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/products/1" \
+python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/products/1" \
   --path-param --token "$TOKEN"
 
 # guarded NoSQL operator oracle — explicit endpoint/field allowlist, paired guards,
 # query-shape mapping, $gt enumeration, and variable-length printable extraction.
 # Login/register/password fields are refused unless --dangerous-auth is explicit.
-python3 ~/.claude/skills/web-ctf/scripts/nosqlquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/nosqlquick.py \
   --url "<target>/api/account/recover" --field email --field backupCode \
   --baseline email=none@example.test --baseline backupCode=invalid \
   --success-json status=verified --probe --map-query-shape
 
 # stored-response SSRF as an arbitrary read: --sweep finds internal services and
 # probes admin paths on each; or name paths directly
-python3 ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
-python3 ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
+python3 ~/.codex/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+python3 ~/.codex/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" /admin/config
 
 # OOB collector + public tunnel in one command. Run it (run_in_background) the moment a lab
 # mentions an admin/operator/reviewer opening your submission — BEFORE the first payload.
-python3 ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge-name>   # prints OOB_URL=
+python3 ~/.codex/skills/web-ctf/scripts/oob.py --name <challenge-name>   # prints OOB_URL=
 grep -a 'HIT\|FLAG' ~/Offsec/Web_CTF/CTF/<challenge-name>/oob.log
 ```
 
@@ -319,15 +326,15 @@ route-specific `Allow` and calibrated `POST {}` fallback discovery. Literal `${.
 saved to `dynamic-links.txt`, never requested, and known vendor bundles/maps are retained under
 `recon/vendor/` but excluded from mining.
 
-A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Offsec/Web_CTF/.claude/settings.json` — placement rules are in CLAUDE.md) scans command results for flag patterns and logs hits to `~/.claude/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
+A `PostToolUse` hook (`scripts/flaghook.py`, wired in `~/Offsec/Web_CTF/.codex/config.toml` — placement rules are in `AGENTS.md`) scans command results for flag patterns and logs hits to `~/.codex/ctf-flags.log`. It is a safety net, not a substitute for reading responses.
 
-**Verify hook activation end-to-end after every app restart or tool-surface change.** In one tool call, print a unique `bug{CodexHarnessHookCheck_<nonce>}` marker; in the next tool call, verify that exact marker landed in `~/.claude/ctf-flaghook-ok`. The hook treats this marker as a health check, not a real flag, so it never touches `ctf-flags.log`. Invoking `flaghook.py` directly proves only the script is correct, not that `PostToolUse` actually fires — a stale or untrusted hook config fails silently. If the sentinel is absent, record `flag hook inactive` in `WORKLOG.md` and keep scanning every response manually.
+**Verify hook activation end-to-end after every app restart or tool-surface change.** In one tool call, print a unique `bug{CodexHarnessHookCheck_<nonce>}` marker; in the next tool call, verify that exact marker landed in `~/.codex/ctf-flaghook-ok`. The hook treats this marker as a health check, not a real flag, so it never touches `ctf-flags.log`. Invoking `flaghook.py` directly proves only the script is correct, not that `PostToolUse` actually fires — a stale or untrusted hook config fails silently. If the sentinel is absent, record `flag hook inactive` in `WORKLOG.md` and keep scanning every response manually.
 
 ## Environment
 
-Paths, tool invocations, and wordlists are in `~/Offsec/Web_CTF/CLAUDE.md` — that's already in context; don't re-derive it. Exploit scripts go in `~/Offsec/Web_CTF/Python/<challenge-name>/`. `ctf-init.sh` stores each target under `~/Offsec/Web_CTF/CTF/<challenge-name>/instances/<hostname>/` and atomically repoints `current`; fresh workspaces also expose compatibility links such as `<challenge-name>/recon/`. Use `current/auth/` for tokens and cookie jars so reprovisioned instances cannot silently reuse stale credentials.
+Paths, tool invocations, and wordlists are in `~/Offsec/Web_CTF/AGENTS.md` — that's already in context; don't re-derive it. Exploit scripts go in `~/Offsec/Web_CTF/Python/<challenge-name>/`. `ctf-init.sh` stores each target under `~/Offsec/Web_CTF/CTF/<challenge-name>/instances/<hostname>/` and atomically repoints `current`; fresh workspaces also expose compatibility links such as `<challenge-name>/recon/`. Use `current/auth/` for tokens and cookie jars so reprovisioned instances cannot silently reuse stale credentials.
 
-CLAUDE.md's shell gotchas (`cd` not persisting, no bare `python`) bite hardest here.
+`AGENTS.md`'s shell and workspace rules apply throughout.
 For `cd`: a `$TOKEN` set in one Bash call is gone in the next unless it's written to a
 file — `echo "$TOKEN" > ~/Offsec/Web_CTF/CTF/<name>/token.txt`, then `T=$(cat ...)` per call.
 For `python`: every invocation in this skill, its references, and its scripts uses

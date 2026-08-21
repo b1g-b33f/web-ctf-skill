@@ -7,9 +7,9 @@ response *headers* on otherwise-normal 403s, and in fields nobody reads twice
 the eyeball pass.
 
 Reads the hook JSON payload on stdin and scans the whole blob as text — no
-dependency on a specific field layout. Exit 2 surfaces stderr back to Claude.
-Appends every hit to ~/.claude/ctf-flags.log with a UTC timestamp. A dedicated
-`bug{CodexHarnessHookCheck_<nonce>}` marker writes ~/.claude/ctf-flaghook-ok
+dependency on a specific field layout. Exit 2 surfaces stderr back to Codex.
+Appends every hit to ~/.codex/ctf-flags.log with a UTC timestamp. A dedicated
+`bug{CodexHarnessHookCheck_<nonce>}` marker writes ~/.codex/ctf-flaghook-ok
 instead, allowing an end-to-end hook activation check without logging a fake flag.
 """
 import datetime
@@ -31,8 +31,8 @@ HOOK_CHECK_RE = re.compile(r'bug\{CodexHarnessHookCheck_[A-Za-z0-9_-]{4,40}\}')
 IGNORE = re.compile(r'(?:' + PREFIXES + r'\{[^}]*(?:\.\.\.|xxx|your|example|placeholder|\[)[^}]*\}'
                     r'|FLAG_RE|flaghook|ctf-flags\.log)', re.I)
 
-LOG = os.path.join(os.path.expanduser("~"), ".claude", "ctf-flags.log")
-HOOK_CHECK_LOG = os.path.join(os.path.expanduser("~"), ".claude", "ctf-flaghook-ok")
+LOG = os.path.join(os.path.expanduser("~"), ".codex", "ctf-flags.log")
+HOOK_CHECK_LOG = os.path.join(os.path.expanduser("~"), ".codex", "ctf-flaghook-ok")
 
 
 def main():
@@ -43,7 +43,7 @@ def main():
     if not blob:
         return 0
 
-    # An ordinary unit test proves this script works; this marker proves Claude
+    # An ordinary unit test proves this script works; this marker proves Codex
     # actually invoked it after a tool call. Keep it out of the real flag log.
     hook_check = HOOK_CHECK_RE.search(blob)
     if hook_check:

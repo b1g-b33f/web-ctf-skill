@@ -5,7 +5,7 @@
 Feroxbuster and nuclei take 1–5 minutes. **Do not block.** Launch and go straight to auth — login/register endpoints are known guesses, not something recon must discover first.
 
 ```bash
-bash ~/.claude/skills/web-ctf/scripts/ctf-init.sh <target> <challenge-name> <platform>
+bash ~/.codex/skills/web-ctf/scripts/ctf-init.sh <target> <challenge-name> <platform>
 ```
 
 Run that command in a retained execution session and let the tool yield a session id while
@@ -55,7 +55,7 @@ hand-mining anything.
 the one thing the automatic pre-auth pass can't see:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ \
+python3 ~/.codex/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ \
   --cookie-file <curl-cookie-jar> --page /dashboard --crawl-pages
 ```
 
@@ -99,16 +99,16 @@ To mine a directory of bundles you already have on disk directly — it already 
 query-string routes, `.concat()` route building, minified axios aliases, and the router table:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<challenge-name>/recon/
+python3 ~/.codex/skills/web-ctf/scripts/jsmine.py ~/Offsec/Web_CTF/CTF/<challenge-name>/recon/
 ```
 
 The inline version below is the fallback if the script is unavailable:
 
 ```bash
 python3 -c "
-import re, glob
+import os, re, glob
 all_content = ''
-for f in glob.glob('~/Offsec/Web_CTF/CTF/<challenge-name>/recon/*.js'):
+for f in glob.glob(os.path.expanduser('~/Offsec/Web_CTF/CTF/<challenge-name>/recon/*.js')):
     with open(f, encoding='utf-8', errors='replace') as fh: all_content += fh.read() + '\n'
 
 # API endpoints — note the trailing char class INCLUDES ? so query-string routes aren't missed
@@ -160,9 +160,9 @@ Hit everything found, **with `$AUTH_HEADER` and again without it.** Use the scri
 # feed it jsmine's METHOD -> PATH section, not just the path list: probing a
 # POST-only route with GET returns the SPA index, which matches the 404
 # calibration exactly and reports not-a-route
-python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ \
+python3 ~/.codex/skills/web-ctf/scripts/jsmine.py recon/ \
   | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
-  | python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" \
+  | python3 ~/.codex/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" \
       --paths - --methods --out recon/probe
 ```
 

@@ -176,11 +176,19 @@ class RegressionTest(unittest.TestCase):
                 methods = fh.read()
 
             self.assertRegex(methods, r'GET\s+/api/data\?limit=10')
+            self.assertRegex(methods, r'GET\s+/api/post/image\?file=\{\.\.\.\}',
+                             "DOM resource GET was not promoted into methods.txt:\n" + out)
             self.assertRegex(methods, r'POST\s+/api/submit')
             self.assertRegex(methods, r'POST\s+/api/graphql')
 
             jsmine_path = os.path.join(tmp, "jsmine.txt")
             self.assertTrue(os.path.isfile(jsmine_path), "jsmine.txt was not written:\n" + out)
+            with open(jsmine_path, encoding="utf-8") as fh:
+                mined = fh.read()
+            self.assertIn("FILE-READ FIELD SIGNALS", mined)
+            self.assertRegex(
+                mined, r'GET\s+/api/post/image\?file=\{\.\.\.\} '
+                r'location=query field=file seed=<dynamic>')
 
     def test_jsharvest_rejects_http_error_bodies_as_bundles(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -309,6 +317,13 @@ class RegressionTest(unittest.TestCase):
                 'POST   /api/roll location=json field=rollOptions seed="none"', signals)
             self.assertIn("Command-injection-shaped request fields mined", out)
             self.assertIn("cmdiquick.py --url", out)
+            lfi_signals = os.path.join(workdir, "recon", "lfi-signals.txt")
+            with open(lfi_signals, encoding="utf-8") as fh:
+                signals = fh.read()
+            self.assertIn(
+                "GET    /api/post/image?file={...} location=query field=file", signals)
+            self.assertIn("File-read-shaped query fields mined", out)
+            self.assertIn("lfiquick.py --url", out)
 
     def test_ctf_init_captures_ferox_progress_in_ferox_log(self):
         """feroxbuster's own -q/--silent flags still leave a startup banner and
@@ -628,6 +643,50 @@ const markup = '<form action="/upload" method="post" enctype="multipart/form-dat
             self.assertIn(
                 'POST   /upload location=multipart field=filename seed=<dynamic>', body)
             self.assertIn("source=DiceRoller.js", body)
+
+
+class JsmineDomResourceFileSignalTest(unittest.TestCase):
+    """Browser resource loads are GET requests even though no fetch/Axios call
+    exists. The exact Ottergram LFI sink lived in an image ``src`` and therefore
+    appeared under ROUTES but vanished from methods.txt and automated probing."""
+
+    def test_dynamic_resource_urls_become_ranked_get_file_read_signals(self):
+        source_text = r'''
+const image = <img src={`/api/post/image?file=${post.image_url}`} />;
+const frame = <iframe src='/api/frame?path=preview.html'></iframe>;
+const loader = jsx("script", {src:"/api/loader?filename=".concat(name)});
+const theme = <link href={`/api/theme?download=${asset}`} />;
+const staticAsset = <script src="/static/app.js"></script>;
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "PostView.js")
+            with open(source, "w", encoding="utf-8") as fh:
+                fh.write(source_text)
+            proc = run_full("jsmine.py", source)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            methods = re.search(
+                r'=== METHOD -> PATH.*?(?=\n===|\Z)', proc.stdout, re.S).group(0)
+            for route in (
+                    "/api/post/image?file={...}",
+                    "/api/frame?path=preview.html",
+                    "/api/loader?filename=probe",
+                    "/api/theme?download={...}"):
+                self.assertIn("GET    " + route, methods)
+            self.assertNotIn("/static/app.js", methods)
+
+            signals = re.search(
+                r'=== FILE-READ FIELD SIGNALS.*?(?=\n===|\Z)',
+                proc.stdout, re.S).group(0)
+            for field in ("file", "path", "filename", "download"):
+                self.assertIn("field=%s" % field, signals)
+            self.assertIn("seed=<dynamic>", signals)
+            self.assertIn("source=PostView.js", signals)
+
+            ranked = re.search(
+                r'=== HIGH-VALUE ACTION ROUTES.*?(?=\n===|\Z)',
+                proc.stdout, re.S).group(0)
+            self.assertEqual(ranked.count("score=120 GET"), 4, ranked)
 
 
 class ProbeSkippedWriteTest(unittest.TestCase):
@@ -1348,7 +1407,7 @@ class FlaghookSyntheticDetectionTest(unittest.TestCase):
     flag pattern; SKILL.md tells an operator to 'verify it with a fake flag after
     changing tool surfaces'. This exercises that verification path directly: a
     synthetic flag anywhere in the hook's stdin payload must exit 2 (surfacing
-    stderr back to Claude) and land in ~/.claude/ctf-flags.log."""
+    stderr back to Codex) and land in ~/.codex/ctf-flags.log."""
 
     def test_synthetic_flag_in_tool_output_is_detected_and_logged(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1356,7 +1415,7 @@ class FlaghookSyntheticDetectionTest(unittest.TestCase):
             payload = json.dumps({"tool_name": "Bash", "tool_response": marker})
             proc = run_full("flaghook.py", input_text=payload, env={"HOME": tmp})
             self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-            log = os.path.join(tmp, ".claude", "ctf-flags.log")
+            log = os.path.join(tmp, ".codex", "ctf-flags.log")
             self.assertTrue(os.path.isfile(log), "flaghook did not create ctf-flags.log")
             with open(log, encoding="utf-8") as fh:
                 self.assertIn(marker, fh.read())
@@ -1409,7 +1468,7 @@ class FlaghookHealthMarkerTest(unittest.TestCase):
     one, because invoking flaghook.py directly only proves the script -- never
     whether PostToolUse actually calls it. A dedicated bug{CodexHarnessHookCheck_
     <nonce>} marker gives an end-to-end activation check: it must land in
-    ~/.claude/ctf-flaghook-ok, a sentinel kept separate from ctf-flags.log so a
+    ~/.codex/ctf-flaghook-ok, a sentinel kept separate from ctf-flags.log so a
     routine activation check never pollutes the real flag record."""
 
     def test_flaghook_health_marker_writes_sentinel_not_flag_log(self):
@@ -1418,12 +1477,12 @@ class FlaghookHealthMarkerTest(unittest.TestCase):
             payload = json.dumps({"tool_name": "Bash", "tool_response": marker})
             proc = run_full("flaghook.py", input_text=payload, env={"HOME": tmp})
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            sentinel = os.path.join(tmp, ".claude", "ctf-flaghook-ok")
+            sentinel = os.path.join(tmp, ".codex", "ctf-flaghook-ok")
             self.assertTrue(os.path.isfile(sentinel),
                             "flaghook did not write the health-check sentinel")
             with open(sentinel, encoding="utf-8") as fh:
                 self.assertEqual(fh.read().strip(), marker)
-            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude", "ctf-flags.log")),
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".codex", "ctf-flags.log")),
                              "a health-check marker must never be logged as a real flag")
 
 
@@ -1861,6 +1920,158 @@ class TemplatequickRegressionTest(unittest.TestCase):
                 self.assertIn(marker, proc.stdout)
                 with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
                     self.assertEqual(sum(1 for line in fh if line.strip()), 1)
+
+
+class LfiquickRegressionTest(unittest.TestCase):
+    """A file-read helper must start from a real baseline, retain other query
+    fields, compare authentication, reuse the exact successful wrapper, and scan
+    both response bodies and headers without turning every differential into LFI."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def url(self, mode="standard", file_value="/uploads/otter1.png", gate=None):
+        url = "%s/api/post/image?mode=%s&file=%s" % (
+            self.base_url, mode, file_value)
+        return url + ("&gate=" + gate if gate else "")
+
+    def test_standard_depth_one_flag_and_anonymous_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url(), "--token", "fixture-user",
+                "--style", "plain", "--max-depth", "2", "--delay", "0",
+                "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("FLAG " + fixture_app.LFI_FLAG, proc.stdout)
+            self.assertIn("winning traversal prefix: style=plain depth=1", proc.stdout)
+            self.assertIn("anonymous replay returned the same flag", proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(records[0]["label"], "baseline")
+            self.assertEqual(records[0]["identity"], "auth")
+            self.assertEqual(records[1]["identity"], "anonymous")
+            self.assertEqual(records[-1]["label"], "replay:anonymous")
+            self.assertEqual(records[-1]["raw_value"], "../flag.txt")
+
+    def test_confirmed_four_dot_depth_is_reused_for_flag_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url("four-dot"),
+                "--style", "four-dot", "--max-depth", "2", "--delay", "0",
+                "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("CONFIRMED file read: style=four-dot depth=2", proc.stdout)
+            self.assertIn("winning traversal prefix: style=four-dot depth=2", proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(records[-2]["raw_value"], "....//....//etc/passwd")
+            self.assertEqual(records[-1]["raw_value"], "....//....//flag.txt")
+
+    def test_double_encoded_wrapper_is_preserved_exactly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url("double-encoded"),
+                "--style", "double-encoded", "--max-depth", "2", "--delay", "0",
+                "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(records[-2]["raw_value"], "..%252f..%252fetc/passwd")
+            self.assertEqual(records[-1]["raw_value"], "..%252f..%252fflag.txt")
+            self.assertIn("%252f", records[-1]["url"])
+
+    def test_flag_in_response_header_is_detected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url("header"),
+                "--style", "plain", "--max-depth", "1", "--delay", "0",
+                "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("FLAG " + fixture_app.LFI_HEADER_FLAG, proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(records[-1]["headers"]["X-Flag"], fixture_app.LFI_HEADER_FLAG)
+
+    def test_invalid_baseline_stops_before_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url(file_value="/uploads/missing.png"),
+                "--style", "plain", "--delay", "0", "--out", tmp)
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("known-valid baseline did not succeed", proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                self.assertEqual(sum(1 for line in fh if line.strip()), 1)
+
+    def test_rate_limit_and_gateway_are_circuit_breakers(self):
+        cases = (("rate", 2, "429 rate limit"),
+                 ("gateway", 3, "CIRCUIT BREAKER"))
+        for mode, expected_code, marker in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                proc = run_full(
+                    "lfiquick.py", "--url", self.url(mode),
+                    "--style", "plain", "--delay", "0", "--out", tmp)
+                self.assertEqual(proc.returncode, expected_code, proc.stdout + proc.stderr)
+                self.assertIn(marker, proc.stdout)
+
+
+@unittest.skipUnless(
+    os.path.isdir(os.path.join(os.path.dirname(SCRIPTS), ".git")),
+    "mirror generation tests run only from the canonical git checkout")
+class ClaudeMirrorSyncRegressionTest(unittest.TestCase):
+    """Codex owns the git checkout; Claude receives an atomic platform rendering
+    with its own invocation frontmatter, paths, and flag-hook evidence location."""
+
+    def test_rendered_mirror_has_claude_variants_and_detects_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "web-ctf")
+            proc = run_full("sync-claude-mirror.py", "--target", target)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertFalse(os.path.islink(target))
+            self.assertFalse(os.path.exists(os.path.join(target, ".git")))
+            self.assertFalse(os.path.exists(os.path.join(target, "agents")))
+
+            with open(os.path.join(target, "SKILL.md"), encoding="utf-8") as fh:
+                skill = fh.read()
+            self.assertIn("user-invocable: true", skill)
+            self.assertIn("# /web-ctf", skill)
+            self.assertIn("~/.claude/skills/web-ctf/scripts/lfiquick.py", skill)
+            self.assertIn("~/Offsec/Web_CTF/.claude/settings.json", skill)
+            self.assertNotIn("~/.codex/skills/web-ctf", skill)
+
+            with open(os.path.join(target, "scripts", "flaghook.py"),
+                      encoding="utf-8") as fh:
+                hook = fh.read()
+            self.assertIn('".claude", "ctf-flags.log"', hook)
+            self.assertNotIn('".codex", "ctf-flags.log"', hook)
+
+            clean = run_full(
+                "sync-claude-mirror.py", "--target", target, "--check")
+            self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+            with open(os.path.join(target, "SKILL.md"), "a", encoding="utf-8") as fh:
+                fh.write("\nmirror drift\n")
+            drift = run_full(
+                "sync-claude-mirror.py", "--target", target, "--check")
+            self.assertEqual(drift.returncode, 1, drift.stdout + drift.stderr)
+            self.assertIn("mirror drift detected", drift.stdout)
+
+    def test_initial_canonical_symlink_requires_explicit_handoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "web-ctf")
+            os.symlink(os.path.dirname(SCRIPTS), target)
+            refused = run_full("sync-claude-mirror.py", "--target", target)
+            self.assertEqual(refused.returncode, 2, refused.stdout + refused.stderr)
+            self.assertIn("use --replace-symlink", refused.stderr)
+
+            replaced = run_full(
+                "sync-claude-mirror.py", "--target", target, "--replace-symlink")
+            self.assertEqual(replaced.returncode, 0, replaced.stdout + replaced.stderr)
+            self.assertFalse(os.path.islink(target))
+            self.assertIn("previous install preserved", replaced.stdout)
 
 
 class FlaghookPlaceholderPrefixTest(unittest.TestCase):

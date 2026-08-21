@@ -18,6 +18,7 @@ from urllib.parse import parse_qsl
 
 PATH_CHARS = r"a-zA-Z0-9/_\-?=&.:{}$"
 STATIC_EXT = re.compile(r'\.(?:js|mjs|css|map|png|jpe?g|gif|svg|ico|woff2?|ttf|pdf|zip)(?:[?#]|$)', re.I)
+API_RESOURCE_ROUTE = re.compile(r'^/(?:api|v\d+|internal|graphql)(?:[/?#]|$)', re.I)
 ACTION_ROUTE = re.compile(
     r'/(?:[^/?#]+/)*(magic(?:-link)?|passwordless|inbox|outbox|emails?|mail|claim|'
     r'activation|activate|enrollment|enroll|invite|callback|session|password|recover|reset|'
@@ -27,6 +28,8 @@ CMDI_FIELD = re.compile(
     r'(?:^|_)(?:cmd|command|exec|execute|shell|arg|args|option|options|flag|flags|'
     r'host|hostname|ip|domain|filename|file_path|filepath|path|binary|program|tool|'
     r'address|target)(?:$|_)', re.I)
+FILE_READ_FIELD = re.compile(
+    r'^(?:file|filename|file_name|filepath|file_path|path|template|download)$', re.I)
 VENDOR_BASENAME = re.compile(
     r'^(?:socket\.io|engine\.io|react(?:-dom)?|runtime|polyfills?|vendors?)(?:[.\-_]|$)', re.I)
 VENDOR_SOURCE = re.compile(
@@ -164,6 +167,96 @@ def route_from_expr(expr):
     if m:
         return concat_route(m.group(2), m.group(3))
     return None
+
+
+def leading_route_expr(text):
+    """Resolve one route expression at the start of a JSX/DOM attribute value.
+
+    Covers quoted literals, template literals, ``"/api/...".concat(value)``, and
+    JSX's brace wrapper. It deliberately does not evaluate arbitrary JavaScript.
+    """
+    text = text.lstrip()
+    if not text:
+        return None
+    if text[0] == "{":
+        depth, quote, escaped = 0, None, False
+        for index, ch in enumerate(text):
+            if quote:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == quote:
+                    quote = None
+                continue
+            if ch in "'\"`":
+                quote = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return leading_route_expr(text[1:index])
+        return None
+    if text[0] not in "'\"`":
+        return None
+    quote, escaped = text[0], False
+    end = None
+    for index, ch in enumerate(text[1:], 1):
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == quote:
+            end = index + 1
+            break
+    if end is None:
+        return None
+    expression = text[:end]
+    remainder = text[end:].lstrip()
+    if quote != "`" and remainder.startswith(".concat("):
+        expression += remainder
+    return route_from_expr(expression)
+
+
+def extract_dom_resource_lines(js):
+    """Promote browser-loaded API resources to probe-ready ``GET`` routes.
+
+    A request made by ``<img src>``, ``<iframe src>``, ``<script src>``, or
+    ``<link href>`` never appears at a fetch/Axios call site. React bundles also
+    compile those attributes into ``src:``/``href:`` object properties. Only
+    application API paths are accepted so ordinary static assets stay excluded.
+    """
+    routes = []
+
+    for match in re.finditer(r'<(?:img|iframe|script|link)\b[^>]{0,2400}>', js, re.I | re.S):
+        tag = match.group(0)
+        for attr in re.finditer(r'\b(?:src|href)\s*=\s*', tag, re.I):
+            route = leading_route_expr(tag[attr.end():])
+            if route and API_RESOURCE_ROUTE.search(route) and not STATIC_EXT.search(route):
+                routes.append(route)
+
+    # React/Preact compiled output: jsx("img",{src:"/api/x?file=".concat(v)}).
+    # Restricting the value to an API route keeps unrelated object metadata out.
+    for prop in re.finditer(r'\b(?:src|href)\s*:\s*', js, re.I):
+        route = leading_route_expr(js[prop.end():prop.end() + 1000])
+        if route and API_RESOURCE_ROUTE.search(route) and not STATIC_EXT.search(route):
+            routes.append(route)
+
+    return ["%-6s %s" % ("GET", route) for route in routes]
+
+
+def file_read_query_fields(line):
+    """Return file-read-shaped query fields from one METHOD -> PATH line."""
+    parts = line.strip().split(None, 1)
+    if len(parts) != 2 or "?" not in parts[1]:
+        return []
+    route = parts[1]
+    fields = []
+    for key, value in parse_qsl(route.split("?", 1)[1], keep_blank_values=True):
+        if FILE_READ_FIELD.fullmatch(key):
+            fields.append((key, value))
+    return fields
 
 
 def object_property(expr, name):
@@ -462,7 +555,8 @@ def extract_method_lines(js, wrapper_names):
         action = attrs.get("action", "")
         if action.startswith("/"):
             forms.append("%-6s %s" % (attrs.get("method", "GET").upper(), action))
-    return call_lines + template_lines + concat_lines + forms + generic_request_lines(js, wrapper_names)
+    return (call_lines + template_lines + concat_lines + forms
+            + generic_request_lines(js, wrapper_names) + extract_dom_resource_lines(js))
 
 
 # The name is optional: `query { ... }` is a valid anonymous operation and is
@@ -728,23 +822,38 @@ def main():
                             for signal in extract_cmdi_signals(blob, wrapper_names))
     section("COMMAND-INJECTION FIELD SIGNALS", cmdi_signals, width=600)
 
+    file_read_signals = []
+    for line in sorted(set(method_lines)):
+        for field, value in file_read_query_fields(line):
+            seed = ("<dynamic>" if not value or value == "probe" or "{" in value or "}" in value
+                    else json.dumps(value))
+            sources = ", ".join(sorted(provenance.get(line, []))) or "unknown source"
+            file_read_signals.append(
+                "%s location=query field=%s seed=%s [source=%s]"
+                % (line, field, seed, sources))
+    section("FILE-READ FIELD SIGNALS", file_read_signals, width=600)
+
     high_value = []
     for line in sorted(set(method_lines)):
+        file_fields = file_read_query_fields(line)
         match = ACTION_ROUTE.search(line)
-        if not match:
-            continue
-        keyword = match.group(1).lower()
-        if keyword in ("inbox", "outbox", "email", "emails", "mail"):
-            score = 110
-        elif keyword in (
-                "magic", "magic-link", "passwordless", "claim", "activation", "activate",
-                "enrollment", "enroll", "invite", "password", "recover", "reset",
-                "verify", "forgot"):
-            score = 100
+        if file_fields:
+            score = 120
+        elif match:
+            keyword = match.group(1).lower()
+            if keyword in ("inbox", "outbox", "email", "emails", "mail"):
+                score = 110
+            elif keyword in (
+                    "magic", "magic-link", "passwordless", "claim", "activation", "activate",
+                    "enrollment", "enroll", "invite", "password", "recover", "reset",
+                    "verify", "forgot"):
+                score = 100
+            else:
+                score = 80
+            if keyword in ("login", "register", "signup"):
+                score = 60
         else:
-            score = 80
-        if keyword in ("login", "register", "signup"):
-            score = 60
+            continue
         sources = ", ".join(sorted(provenance.get(line, [])))
         high_value.append("score=%d %s [%s]" % (score, line, sources or "unknown source"))
     section("HIGH-VALUE ACTION ROUTES", high_value)

@@ -19,37 +19,37 @@ saves complete response headers/bodies under `responses/`.
 
 ```bash
 # JSON, including dotted/list paths such as wrapper[0].rollOptions
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url 'https://target/api/roll' --method POST \
   --json '{"dice":[{"type":"d100","count":1}],"rollOptions":"none"}' \
   --field rollOptions --out recon/cmdiquick
 
 # Query string
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url 'https://target/ping?host=127.0.0.1' --param host --out recon/cmdiquick
 
 # application/x-www-form-urlencoded
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url 'https://target/check' --method POST \
   --form 'host=127.0.0.1&mode=fast' --field host --out recon/cmdiquick
 
 # Duplicate query/form/cookie names use a 1-based occurrence
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url 'https://target/check?host=safe&host=127.0.0.1' \
   --param host --occurrence 2 --out recon/cmdiquick
 
 # Path marker: the marker is replaced with the seed for the valid baseline
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url 'https://target/tools/ping/*' --path-marker '*' --seed 127.0.0.1 \
   --out recon/cmdiquick
 
 # Header
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url 'https://target/process' --header 'X-Diagnostic-Host: 127.0.0.1' \
   --inject-header X-Diagnostic-Host --out recon/cmdiquick
 
 # One cookie value without rebuilding the rest of the Cookie header
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url 'https://target/process' --cookie 'session=abc; target=127.0.0.1' \
   --cookie-param target --out recon/cmdiquick
 ```
@@ -58,7 +58,7 @@ Use `--body-file` for XML, `text/plain`, a raw GraphQL document, or another seri
 the marker at one value and supply the body's real content type:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url 'https://target/check' --method POST --body-file request.xml \
   --content-type application/xml --marker CMDI_INJECT --seed 127.0.0.1 \
   --out recon/cmdiquick
@@ -71,7 +71,7 @@ ordinary headers, content type/boundary, and body while recalculating transport 
 the Requests HTTP stack and is not a byte-for-byte duplicate-header or request-smuggling engine.
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url 'https://target' --request-file request.txt \
   --marker CMDI_INJECT --seed report.txt --out recon/cmdiquick
 ```
@@ -120,7 +120,7 @@ Default probes do not sleep, write files, make callbacks, or open shells. If the
 is silent and the endpoint is safe to repeat, opt in to paired timing controls:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py ... --blind-time 3
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py ... --blind-time 3
 ```
 
 The helper sends two unchanged controls, tries each applicable winning-wrapper candidate once, and
@@ -134,7 +134,7 @@ explicit. The helper appends a unique nonce to the callback base and only confir
 appears in the collector log:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py ... \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py ... \
   --oob-url "$OOB_URL/cmdi" --oob-log oob.log --oob-wait 10
 ```
 

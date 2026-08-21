@@ -199,6 +199,16 @@ if [[ -s "$RECON/cmdi-signals.txt" ]]; then
   sed 's/^/    /' "$RECON/cmdi-signals.txt"
   echo "[!] Reconstruct one known-valid request, then run cmdiquick.py against one explicit location."
 fi
+awk '
+  /^=== FILE-READ FIELD SIGNALS / { inside=1; next }
+  /^=== / { inside=0 }
+  inside && /^  / { sub(/^  /, ""); print }
+' "$RECON/jsmine.txt" 2>/dev/null > "$RECON/lfi-signals.txt"
+if [[ -s "$RECON/lfi-signals.txt" ]]; then
+  echo "[!] File-read-shaped query fields mined — high-priority candidates, not findings:"
+  sed 's/^/    /' "$RECON/lfi-signals.txt"
+  echo "[!] Capture one known-valid file URL, then run lfiquick.py against that exact baseline."
+fi
 awk 'toupper($1) == "POST" && tolower($2) ~ "(^|/)graphql($|[?/])" { print $2 }' \
   "$RECON/methods.txt" 2>/dev/null | sort -u > "$RECON/graphql-endpoints.txt"
 GRAPHQL_PATH=$(head -1 "$RECON/graphql-endpoints.txt" 2>/dev/null)
@@ -335,6 +345,15 @@ if [[ -s "$RECON/cmdi-signals.txt" ]]; then
   echo "  JSON: python3 $SCRIPT_DIR/cmdiquick.py --url <full-url> --method POST --json '<valid-body>' --field <field> --out $RECON/cmdiquick"
   echo "  Form: python3 $SCRIPT_DIR/cmdiquick.py --url <full-url> --method POST --form '<valid-body>' --field <field> --out $RECON/cmdiquick"
   echo "  Other: use --param/--occurrence, --path-marker, --inject-header, --cookie-param, --body-file/--marker, or --request-file/--marker."
+fi
+
+if [[ -s "$RECON/lfi-signals.txt" ]]; then
+  echo ""
+  echo "── File-read field signals (recon/lfi-signals.txt) ──────────"
+  cat "$RECON/lfi-signals.txt"
+  echo "  Preserve a successful URL with its real file value; do not substitute a guessed baseline."
+  echo "  python3 $SCRIPT_DIR/lfiquick.py --url '<full-known-valid-url>' --param <field> --token \"\$TOKEN\" --out $RECON/lfiquick"
+  echo "  The helper compares auth/anonymous access and reuses the exact winning depth and encoding."
 fi
 
 AUTH_LIFECYCLE_RE='magic|passwordless|inbox|outbox|claim|activat|enroll|invite|/api/(email|emails|mail)([/?[:space:]]|$)'

@@ -7,7 +7,7 @@ that produced it. If the response adds a field whose complete value is a single-
 such as `"caption":"{value}"`, resubmit that field before trying generic SSTI payloads:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/templatequick.py \
+python3 ~/.codex/skills/web-ctf/scripts/templatequick.py \
   --url <target>/api/forecast/indicator --token "$TOKEN" \
   --data '{"stock_id":1,"formula":"10*10"}' --out recon/templatequick
 ```

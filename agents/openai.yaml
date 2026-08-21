@@ -1,0 +1,4 @@
+interface:
+  display_name: "Web CTF"
+  short_description: "Solve web CTFs and application security labs"
+  default_prompt: "Use $web-ctf to solve this authorized web CTF target and extract the flag."

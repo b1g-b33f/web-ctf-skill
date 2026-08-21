@@ -4,7 +4,7 @@ Run the read-only helper as soon as JS mining or recon confirms a GraphQL endpoi
 same authenticated parallel burst as `jwtquick.py`; do not wait for the JWT path to fail first.
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/graphqlquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/graphqlquick.py \
   --url <target>/api/graphql --token "$TOKEN" --id "$YOUR_ID" \
   --out recon/graphqlquick
 ```

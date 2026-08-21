@@ -53,7 +53,7 @@ done
 Or let the harness diff all three identities at once:
 
 ```bash
-python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> \
+python3 ~/.codex/skills/web-ctf/scripts/probe.py --base <target> \
   --token "$ADMIN_TOKEN" --lowpriv-token "$LOW" --write --paths paths.txt
 ```
 

@@ -1,7 +1,8 @@
-# web-ctf — a web CTF harness for Claude Code
+# web-ctf — a web CTF harness maintained by Codex
 
 A progressive-disclosure skill for challenges against a **running web application**: recon, auth,
-endpoint probing, exploitation, flag extraction. Invoke it with `/web-ctf`.
+endpoint probing, exploitation, flag extraction. Invoke it as `$web-ctf` in Codex or
+`/web-ctf` in Claude Code.
 
 ```
 /web-ctf [platform] <target> [challenge-name] [username] [password]
@@ -24,7 +25,7 @@ different shape, not a superset of this one.
 ## How it is organised
 
 ```
-SKILL.md            ~6.2k tokens, always loaded: routing + order of operations
+SKILL.md            ~7.2k tokens, always loaded: routing + order of operations
 references/*.md     16 files, loaded one at a time when a signal fires
 scripts/*.py        real tooling (env-overridable paths — portable as-is)
 ```
@@ -56,6 +57,7 @@ browser and exfiltrate to a listener you control.
 | `graphqlquick.py` | Bounded post-auth, read-only GraphQL fast track: anonymous/auth reachability, Query introspection, validation-error schema oracle when introspection is disabled, ID `1`/self checks, independent sensitive-field probes, header/body flag scanning, and hard stops on a flag, rate limit, gateway failure, or request budget. Never generates mutations |
 | `templatequick.py` | Bounded response-only template-field fast track: start from one known-valid JSON request, detect a top-level placeholder field absent from that request, prove client control and harmless single-brace interpolation, then check a five-variable high-value set while scanning headers/body and retaining JSONL evidence |
 | `cmdiquick.py` | Bounded dialect-aware OS command-injection detector: preserve one known-valid request; mutate one explicit query/form/nested-JSON/path/header/cookie/raw-body/raw-request location; distinguish POSIX, `cmd.exe`, and PowerShell across common separators, newlines, quote breakouts, and blind substitution contexts; require identity output, a reflection-controlled execution marker, paired timing, or a verified OOB nonce. Reuses the exact winning wrapper for `whoami`, retains full response evidence plus a machine-readable verdict, and treats throttling, filtering, gateways, or budget exhaustion as inconclusive |
+| `lfiquick.py` | Bounded GET path-traversal/LFI fast track: preserves a known-valid file URL and unrelated query fields, calibrates a same-directory miss, compares authenticated and anonymous reachability, tests plain/four-dot/double-encoded traversal to a capped depth, and reuses the exact winning style/depth for common flag paths. Scans headers and bodies, retains every response plus JSONL evidence, and treats weak differentials, throttling, gateways, and budget exhaustion as inconclusive |
 | `jsmine.py` | Bundles and rendered HTML → routes, direct calls, native `fetch`, discovered request wrappers, HTML form methods, command-injection-shaped JSON/query/form/path/header/multipart fields, and complete named GraphQL operations with roots, variables, identity signals, and provenance. Keeps probe-ready output annotation-free, then adds provenance and high-value action-route ranking; warns loudly when routes exist but no methods map |
 | `jsharvest.py` | Fetches pages and valid `<script src>` bundles plus source maps, quarantines literal JS/template hrefs and vendor bundles, rejects error/HTML bodies masquerading as JavaScript, runs `jsmine.py`, and writes `jsmine.txt`, `methods.txt`, `dynamic-links.txt`, and `source-provenance.tsv` |
 | `quickrecon.py` | SPA-fallback-aware existence check with optional action-route method fallback: calibrated GET/POST bodies, route-specific `Allow`, and safe `POST {}` validation probes. A 429 is inconclusive; gateway failures trip a circuit breaker |
@@ -71,62 +73,73 @@ browser and exfiltrate to a listener you control.
 
 ```bash
 # run before normally redeeming a magic/activation token for a seeded identity
-python3 ~/.claude/skills/web-ctf/scripts/authquick.py --base <target> \
+python3 ~/.codex/skills/web-ctf/scripts/authquick.py --base <target> \
   --account '<email>=<name>' --password '<chosen-password>' \
   --register-field '<required-key>=<value>' --objective-path '<protected-path>'
 
 # run this the moment you hold a token — foreground, ~1s, not a background job
-python3 ~/.claude/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
+python3 ~/.codex/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" --base <target> --test /api/admin/stats
 
-python3 ~/.claude/skills/web-ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
+python3 ~/.codex/skills/web-ctf/scripts/jsmine.py $CTF_ROOT/<name>/recon/
 
 # known-valid request + one explicit location; see references/command-injection.md
-python3 ~/.claude/skills/web-ctf/scripts/cmdiquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --url <target>/api/roll --method POST \
   --json '{"dice":[{"type":"d100","count":1}],"rollOptions":"none"}' \
   --field rollOptions --out recon/cmdiquick
 
+# known-valid file URL + one explicit query field; see references/traversal-upload.md
+python3 ~/.codex/skills/web-ctf/scripts/lfiquick.py \
+  --url "<target>/api/post/image?file=/uploads/known.png" --param file \
+  --token "$TOKEN" --out recon/lfiquick
+
 # run this in the same authenticated parallel burst as jwtquick.py when GraphQL is mapped
-python3 ~/.claude/skills/web-ctf/scripts/graphqlquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/graphqlquick.py \
   --url <target>/api/graphql --token "$TOKEN" --id "$YOUR_ID" --out recon/graphqlquick
 
 # valid response adds a response-only field such as caption:"{value}"
-python3 ~/.claude/skills/web-ctf/scripts/templatequick.py \
+python3 ~/.codex/skills/web-ctf/scripts/templatequick.py \
   --url <target>/api/forecast/indicator --token "$TOKEN" \
   --data '{"stock_id":1,"formula":"10*10"}' --out recon/templatequick
 
 # re-harvest bundles and rendered forms once authenticated
-python3 ~/.claude/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ \
+python3 ~/.codex/skills/web-ctf/scripts/jsharvest.py --base <target> --out recon/ \
   --cookie-file <curl-cookie-jar> --page /dashboard --crawl-pages
 
 # pipe the METHOD -> PATH section so POST-only routes are probed as POST
-python3 ~/.claude/skills/web-ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
-  | python3 ~/.claude/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths - --methods
+python3 ~/.codex/skills/web-ctf/scripts/jsmine.py recon/ | sed -n '/METHOD -> PATH/,/ROUTER PATHS/p' \
+  | python3 ~/.codex/skills/web-ctf/scripts/probe.py --base <target> --token "$TOKEN" --paths - --methods
 
 # low-volume SQLi fast-track, before sqlmap
-python3 ~/.claude/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
+python3 ~/.codex/skills/web-ctf/scripts/sqlquick.py --url "<target>/api/search?q=1" --token "$TOKEN"
 
 # guarded NoSQL operator probe; action/recovery fields only unless dangerous auth is explicit
-python3 ~/.claude/skills/web-ctf/scripts/nosqlquick.py \
+python3 ~/.codex/skills/web-ctf/scripts/nosqlquick.py \
   --url "<target>/api/account/recover" --field email --field backupCode \
   --baseline email=none@example.test --baseline backupCode=invalid \
   --success-json status=verified --probe --map-query-shape
 
-python3 ~/.claude/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
+python3 ~/.codex/skills/web-ctf/scripts/ssrfget.py --base <target> --token "$TOKEN" --sweep
 
 # start this BEFORE the first payload on any admin-bot lab
-python3 ~/.claude/skills/web-ctf/scripts/oob.py --name <challenge>
+python3 ~/.codex/skills/web-ctf/scripts/oob.py --name <challenge>
 ```
 
-## Install
+## Install and ownership
 
-1. Symlink this directory to `~/.claude/skills/web-ctf/` (don't copy — keep the git clone the
-   single source of truth so edits and `gh`-based maintenance stay in one place):
+The git checkout is the canonical source and Codex is its maintainer. Codex runs that checkout
+directly through a symlink, so every validated maintenance change is immediately the version it
+uses:
+
+1. Symlink this directory to `~/.codex/skills/web-ctf/`:
    ```bash
-   ln -s ~/Offsec/Web_CTF/web-ctf-skill ~/.claude/skills/web-ctf
+   ln -s ~/Offsec/Web_CTF/web-ctf-skill ~/.codex/skills/web-ctf
    ```
-2. Set `CTF_ROOT` to where you want challenge workspaces (defaults to `~/Offsec/Web_CTF/CTF`, see below).
-3. Optionally wire the flag hook (next section).
+2. Claude Code runs a generated mirror at `~/.claude/skills/web-ctf/`. Refresh it only with
+   `python3 scripts/sync-claude-mirror.py` after canonical tests and the consistency audit pass;
+   do not maintain that directory independently.
+3. Set `CTF_ROOT` to where you want challenge workspaces (defaults to `~/Offsec/Web_CTF/CTF`, see below).
+4. Optionally wire the flag hook (next section).
 
 Scripts need no edits — they take paths as arguments and read `CTF_ROOT`, `SECLISTS`,
 `CLOUDFLARED`, `NGROK` and `NOTES_VAULT` from the environment.
@@ -181,26 +194,33 @@ own index, kept as a worked example of how to organise one.
 in **project** settings rather than user settings, so it's scoped to CTF work rather than every
 session everywhere.
 
-**Placement matters and is easy to get wrong.** Claude Code resolves project settings by walking
-*up* from the session's actual working directory — never down into subdirectories. Put
-`.claude/settings.json` at (or above) wherever your `/web-ctf` sessions actually start, **not**
-inside `$CTF_ROOT` or a per-challenge folder underneath it. A copy nested one level too deep sits
-there validly formed and silently never loads — this shipped once, ran an entire live session
-with the hook dark, and was only caught because the flag happened to also print to stdout
-directly. If sessions start from `~/Offsec/Web_CTF`, the file belongs at `~/Offsec/Web_CTF/.claude/settings.json`.
+**Placement matters and is easy to get wrong.** Codex project configuration belongs at (or above)
+the directory where CTF tasks start, not inside `$CTF_ROOT` or a per-challenge folder underneath
+it. If tasks start from `~/Offsec/Web_CTF`, wire the hook in
+`~/Offsec/Web_CTF/.codex/config.toml`:
 **Verify it, don't assume it:** after wiring it, run a Bash command that echoes a fake flag
-pattern (`echo 'bug{TEST}'`) and confirm a line actually lands in `~/.claude/ctf-flags.log`
+pattern (`echo 'bug{TEST}'`) and confirm a line actually lands in `~/.codex/ctf-flags.log`
 before trusting it in a real run.
 
-```json
-{ "hooks": { "PostToolUse": [ { "matcher": "Bash", "hooks": [
-  { "type": "command",
-    "command": "python3 \"<path-to>/.claude/skills/web-ctf/scripts/flaghook.py\"",
-    "timeout": 15 } ] } ] } }
+```toml
+[features]
+hooks = true
+
+[[hooks.PostToolUse]]
+matcher = ".*"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'python3 "/Users/<user>/.codex/skills/web-ctf/scripts/flaghook.py"'
+timeout = 15
 ```
 
 Exit 2 is intentional — it surfaces the hit back to the model. Do not wrap the command in
 `|| true`, which would swallow it.
+
+The Claude mirror keeps its own `.claude` paths and `user-invocable` frontmatter. Its project hook
+uses Claude Code's `PostToolUse` JSON shape; these platform differences are generated by the mirror
+sync and covered by regression tests.
 
 ## Consistency audit
 
@@ -247,6 +267,10 @@ the PowerShell `curl` alias) that were dropped from the current docs since they 
 the primary platform.
 
 ## Contributing
+
+Make changes in this canonical checkout, never in the Claude mirror. A maintenance handoff is
+complete only after the full regression suite and `scripts/audit.py` pass, the mirror sync runs,
+and the mirror's own tests pass.
 
 The references are deliberately written as *decision rules with the evidence behind them*, not as
 payload dumps — each one exists because a specific failure cost real time. If you add a lesson,
