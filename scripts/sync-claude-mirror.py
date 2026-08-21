@@ -67,8 +67,12 @@ def render(stage):
 def manifest(root):
     result = {}
     for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if ("__pycache__" in relative.parts or ".git" in relative.parts
+                or path.name == ".DS_Store" or path.suffix in {".pyc", ".pyo"}):
+            continue
         if path.is_file() and not path.is_symlink():
-            result[str(path.relative_to(root))] = path.read_bytes()
+            result[str(relative)] = path.read_bytes()
     return result
 
 
