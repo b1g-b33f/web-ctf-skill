@@ -233,11 +233,16 @@ python3 ~/.codex/skills/web-ctf/scripts/cmdiquick.py \
   --field rollOptions --out recon/cmdiquick
 
 # file-read-shaped query field: preserve a genuinely successful file URL, calibrate a
-# same-directory miss, test bounded traversal styles/depths, and reuse the exact winner.
+# same-directory miss, test bounded Linux/Windows traversal styles/depths, and reuse the
+# exact winner across flag, environment, application-root, and configuration targets.
 # With auth supplied, the baseline and winning read are also replayed anonymously.
 python3 ~/.codex/skills/web-ctf/scripts/lfiquick.py \
   --url "<target>/api/post/image?file=/uploads/known.png" --param file \
   --token "$TOKEN" --out recon/lfiquick
+# If the core profile exhausts cleanly, add the curated legacy/Unicode/null-byte families:
+python3 ~/.codex/skills/web-ctf/scripts/lfiquick.py \
+  --url "<known-valid-file-url>" --param file --profile extended \
+  --token "$TOKEN" --out recon/lfiquick-extended
 
 # bounded read-only GraphQL fast track: anonymous/auth reachability, introspection, then
 # validation-error schema oracle + high-value Query fields when introspection is disabled

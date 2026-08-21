@@ -149,8 +149,12 @@ CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE"
 GRAPHQL_FLAG = "bug" + "{GraphqlQuickRegression123}"
 LFI_FLAG = "bug" + "{LfiQuickRegression123}"
 LFI_HEADER_FLAG = "bug" + "{LfiQuickHeaderRegression123}"
+LFI_ENV_FLAG = "bug" + "{LfiQuickEnvironmentRegression123}"
+LFI_WINDOWS_FLAG = "bug" + "{LfiQuickWindowsConfigRegression123}"
 LFI_BASELINE = b"\x89PNG\r\n\x1a\nfixture-image"
 LFI_PASSWD = b"root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000::/home/user:/bin/sh\n"
+LFI_PROC_STATUS = b"Name:\tfixture-app\nUmask:\t0022\nState:\tS (sleeping)\nPid:\t4242\n"
+LFI_WININI = b"; for 16-bit app support\n[fonts]\n[extensions]\n[mci extensions]\n"
 LFI_MISSING = b'{"error":"File not found"}'
 
 # Ottergram-shaped function-level authorization. Three routes under /api/admin
@@ -431,6 +435,31 @@ class Handler(BaseHTTPRequestHandler):
                     return 200, "text/plain", LFI_PASSWD
                 if decoded_again == "../../flag.txt":
                     return 200, "text/plain", LFI_FLAG.encode()
+            if mode == "linux-env":
+                if file_value == "..//..//etc/passwd":
+                    return 200, "text/plain", LFI_PASSWD
+                if file_value == "..//..//proc/self/environ":
+                    return 200, "application/octet-stream", (
+                        b"PATH=/usr/local/bin\x00OBJECTIVE=" + LFI_ENV_FLAG.encode())
+            if mode == "windows":
+                if file_value == "..\\..\\Windows\\win.ini":
+                    return 200, "text/plain", LFI_WININI
+                if file_value == "..\\..\\inetpub\\wwwroot\\web.config":
+                    return 200, "application/xml", (
+                        b"<configuration><add key=\"objective\" value=\""
+                        + LFI_WINDOWS_FLAG.encode() + b"\"/></configuration>")
+            if mode == "slash-encoded":
+                if file_value == "../../etc/passwd":
+                    return 200, "text/plain", LFI_PASSWD
+                if file_value == "../../app/.env":
+                    return 200, "text/plain", b"FLAG=" + LFI_ENV_FLAG.encode()
+            if mode == "passwd-blocked":
+                if file_value == "../../proc/self/status":
+                    return 200, "text/plain", LFI_PROC_STATUS
+                if file_value == "../../app/.env":
+                    return 200, "text/plain", b"OBJECTIVE=" + LFI_ENV_FLAG.encode()
+            if mode == "legacy-null" and file_value == "../flag.txt\x00":
+                return 200, "text/plain", LFI_FLAG.encode()
             return 404, "application/json", LFI_MISSING
         if path == "/api/data":
             return 401, "application/json", DATA_401

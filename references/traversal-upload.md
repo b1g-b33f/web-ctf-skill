@@ -5,14 +5,39 @@
 Start from a URL that already returns a real file. `lfiquick.py` preserves that baseline and all
 other query fields, calibrates a same-directory missing-file control, tests a bounded traversal
 matrix, and scans response headers as well as bodies. If auth is supplied, it checks the baseline
-and winning read anonymously too. A confirmed `/etc/passwd` read causes the exact winning style
-and depth to be reused for the flag sweep; differentials without a file signature remain
-inconclusive and are retained under `--out` for inspection.
+and winning read anonymously too.
+
+The core profile is adaptive rather than `flag.txt`-only:
+
+- Linux signatures: `/etc/passwd`, then bounded fallbacks to `/proc/self/status` and
+  `/etc/os-release` when passwd is filtered.
+- Windows signatures: `C:/Windows/win.ini`, then the Windows hosts file.
+- Core path families: raw slash/backslash, absolute POSIX/drive paths, doubled slash, four-dot,
+  encoded slash, and double encoding.
+- After a signature or credible differential, the exact style and depth are reused across root,
+  `/app`, `/usr/src/app`, `/workspace`, `/challenge`, user desktops, IIS/XAMPP roots,
+  `/proc/*/environ`, `.env`, `config.json`, `config.php`, and `web.config` targets.
+
+`--profile extended` adds encoded-dot/backslash, mixed separators, fully double-encoded traversal,
+overlong and Unicode separators, plus a small null-byte/suffix set. It has its own 260-request cap;
+the core profile caps at 128. Both stop on a flag, rate limit, gateway failure, or explicit budget.
+Differentials without a known file signature remain inconclusive and are retained under `--out`.
+
+These families are curated from the local SecLists LFI corpus, including `LFI-Jhaddix.txt`; the
+helper deliberately does **not** replay all 930 Jhaddix entries. That list includes malformed
+payloads, command-style lines, obsolete variants, and extensive log paths. Log poisoning, PHP
+wrappers that can cross into execution, and full raw-wordlist spraying remain manual, explicit
+follow-ups rather than part of the default read-only helper.
 
 ```bash
 python3 ~/.codex/skills/web-ctf/scripts/lfiquick.py \
   --url "<target>/api/file?name=/uploads/known.txt" --param name \
   --token "$TOKEN" --out recon/lfiquick
+
+# Only after the core profile exhausts without throttling or a circuit break:
+python3 ~/.codex/skills/web-ctf/scripts/lfiquick.py \
+  --url "<target>/api/file?name=/uploads/known.txt" --param name \
+  --profile extended --token "$TOKEN" --out recon/lfiquick-extended
 ```
 
 Use the manual probes below only when the endpoint cannot be represented as one GET query field,
