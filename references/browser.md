@@ -8,6 +8,20 @@ parse URLs like a browser. It is a supplement, not a replacement.
 Open an external target with `preview_start({url: "<target>"})`. First load of a new origin
 hits a permission gate — expected.
 
+## Static DOM-XSS triage
+
+`jsharvest.py` passes both downloaded bundles and reconstructed source-map files under `recon/src/`
+through `jsmine.py`. Its **DOM XSS CANDIDATES** section reports only a recognized browser-controlled
+source reaching a likely execution sink in one application file, with provenance. Sources include
+`location.hash/search/href`, `document.URL`/`referrer`, `window.name`, and message-event `data`;
+sinks include `innerHTML`, `insertAdjacentHTML`, `document.write`, React
+`dangerouslySetInnerHTML`, `srcdoc`, parser/fragment APIs, jQuery HTML insertion, and string-eval
+surfaces.
+
+A candidate is not a finding: inspect the data flow, any decoding/sanitization, and the sink's
+actual context. Confirm a controllable payload in the browser before claiming execution. A plain
+sink with no reported source, or a source rendered through `textContent`, is not enough.
+
 ## Use it for
 
 **DOM / reflected XSS where the flag is client-side.** curl can't tell you whether a payload

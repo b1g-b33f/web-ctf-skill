@@ -265,6 +265,11 @@ class RegressionTest(unittest.TestCase):
             mined = run("jsmine.py", tmp)
             self.assertNotIn("socket.io vendor admin comment", mined,
                              "quarantined vendor source leaked back into application mining")
+            dom_xss = re.search(
+                r'=== DOM XSS CANDIDATES.*?(?=\n===|\Z)', mined, re.S)
+            self.assertIsNotNone(dom_xss, mined)
+            self.assertIn("source=location.hash sink=innerHTML expression=fragment", dom_xss.group(0))
+            self.assertIn("origin=src/components/AdminPanel.js", dom_xss.group(0))
 
     def test_jsmine_surfaces_narrative_hint_text(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -687,6 +692,44 @@ const staticAsset = <script src="/static/app.js"></script>;
                 r'=== HIGH-VALUE ACTION ROUTES.*?(?=\n===|\Z)',
                 proc.stdout, re.S).group(0)
             self.assertEqual(ranked.count("score=120 GET"), 4, ranked)
+
+
+class JsmineDomXssCandidateTest(unittest.TestCase):
+    """Only a recognized browser-controlled source reaching an execution sink is a lead.
+
+    The detector is intentionally not a taint engine: it should surface simple
+    direct and local-variable flows with provenance while ignoring safe rendering
+    and sink-only uses that have no known attacker-controlled source.
+    """
+
+    def test_hash_and_postmessage_reach_sinks_but_safe_rendering_does_not(self):
+        source_text = r'''
+const fragment = decodeURIComponent(location.hash.slice(1));
+preview.innerHTML = fragment;
+window.addEventListener("message", (event) => {
+  preview.insertAdjacentHTML("beforeend", event.data);
+});
+const query = location.search;
+preview.textContent = query;
+const fixedMarkup = "<strong>trusted</strong>";
+preview.innerHTML = fixedMarkup;
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "DomPreview.tsx")
+            with open(source, "w", encoding="utf-8") as fh:
+                fh.write(source_text)
+            proc = run_full("jsmine.py", source)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            section = re.search(
+                r'=== DOM XSS CANDIDATES.*?(?=\n===|\Z)', proc.stdout, re.S)
+            self.assertIsNotNone(section, proc.stdout)
+            body = section.group(0)
+            self.assertIn("source=location.hash sink=innerHTML expression=fragment", body)
+            self.assertIn("source=postMessage.data sink=insertAdjacentHTML expression=event.data", body)
+            self.assertIn("origin=DomPreview.tsx", body)
+            self.assertNotIn("textContent", body)
+            self.assertNotIn("fixedMarkup", body)
+            self.assertEqual(body.count("source="), 2, body)
 
 
 class ProbeSkippedWriteTest(unittest.TestCase):

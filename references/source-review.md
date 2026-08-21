@@ -43,6 +43,10 @@ grep -rE '(exec|eval|system|popen|render_template_string|subprocess|child_proces
 ```
 `file.save` / `move_uploaded_file` with an unsanitized filename → write traversal (`traversal-upload.md`).
 
+This is a **server-side** sink pass. For client-side DOM XSS, `jsmine.py` analyzes both shipped
+application JS and `jsharvest.py`'s reconstructed `recon/src/` tree; validate any reported
+source-to-sink candidate through `references/browser.md`.
+
 **6. Database schema** — `schema.sql`, `models/`, `migrations/`: table names, column names, seed data containing flags or admin creds.
 
 **7. Dockerfile / docker-compose.yml** — flag path, env vars, exposed ports, base image.

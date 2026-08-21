@@ -246,6 +246,100 @@ def extract_dom_resource_lines(js):
     return ["%-6s %s" % ("GET", route) for route in routes]
 
 
+DOM_XSS_DIRECT_SOURCES = (
+    ("location.hash", re.compile(r'(?<![\w$])(?:window\s*\.\s*)?location\s*\.\s*hash\b', re.I)),
+    ("location.search", re.compile(r'(?<![\w$])(?:window\s*\.\s*)?location\s*\.\s*search\b', re.I)),
+    ("location.href", re.compile(r'(?<![\w$])(?:window\s*\.\s*)?location\s*\.\s*href\b', re.I)),
+    ("document.URL", re.compile(r'(?<![\w$])document\s*\.\s*(?:URL|documentURI)\b', re.I)),
+    ("document.referrer", re.compile(r'(?<![\w$])document\s*\.\s*referrer\b', re.I)),
+    ("window.name", re.compile(r'(?<![\w$])window\s*\.\s*name\b', re.I)),
+)
+
+
+DOM_XSS_SINKS = (
+    ("innerHTML", re.compile(r'\.\s*innerHTML\s*=\s*([^;\n]+)', re.I)),
+    ("outerHTML", re.compile(r'\.\s*outerHTML\s*=\s*([^;\n]+)', re.I)),
+    ("insertAdjacentHTML", re.compile(
+        r'\.\s*insertAdjacentHTML\s*\(\s*[^,]+,\s*([^\n)]+)', re.I)),
+    ("document.write", re.compile(
+        r'\bdocument\s*\.\s*writeln?\s*\(\s*([^\n)]+)', re.I)),
+    ("dangerouslySetInnerHTML", re.compile(
+        r'\bdangerouslySetInnerHTML\s*(?:=|:)\s*\{\s*(?:\{\s*)?__html\s*:\s*([^}\n]+)',
+        re.I)),
+    ("v-html", re.compile(r'\bv-html\s*=\s*["\']([^"\']+)["\']', re.I)),
+    ("DOMParser.parseFromString", re.compile(
+        r'\.\s*parseFromString\s*\(\s*([^,\n)]+)', re.I)),
+    ("createContextualFragment", re.compile(
+        r'\.\s*createContextualFragment\s*\(\s*([^\n)]+)', re.I)),
+    ("jQuery HTML insertion", re.compile(
+        r'\.\s*(?:html|append|prepend|before|after|replaceWith)\s*\(\s*([^\n)]+)', re.I)),
+    ("eval/Function", re.compile(
+        r'\b(?:eval|Function)\s*\(\s*([^,\n)]+)', re.I)),
+    ("string timer", re.compile(
+        r'\b(?:setTimeout|setInterval)\s*\(\s*([^,\n)]+)', re.I)),
+    ("srcdoc", re.compile(r'\.\s*srcdoc\s*=\s*([^;\n]+)', re.I)),
+    ("event-handler attribute", re.compile(
+        r'\.\s*setAttribute\s*\(\s*["\']on[a-z]+["\']\s*,\s*([^\n)]+)', re.I)),
+)
+
+
+def message_event_names(js):
+    """Return callback variables that receive postMessage event objects."""
+    names = set()
+    patterns = (
+        r'\baddEventListener\s*\(\s*["\']message["\']\s*,\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)',
+        r'\bonmessage\s*=\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)',
+    )
+    for pattern in patterns:
+        names.update(re.findall(pattern, js, re.I))
+    return names
+
+
+def direct_dom_xss_sources(text, event_names):
+    """Return recognized client-controlled values used by one expression."""
+    found = {name for name, pattern in DOM_XSS_DIRECT_SOURCES if pattern.search(text)}
+    for event_name in event_names:
+        if re.search(r'(?<![\w$])%s\s*\.\s*data\b' % re.escape(event_name), text):
+            found.add("postMessage.data")
+    return found
+
+
+def dom_xss_candidates(js):
+    """Find conservative source-to-DOM-sink candidates in one application blob.
+
+    This is deliberately a lightweight static triage pass, not a taint engine. It
+    requires a browser-controlled source in the sink expression or in a simple
+    local variable assigned from one. A candidate still needs browser verification
+    of the actual data flow, sanitizer, and sink context.
+    """
+    event_names = message_event_names(js)
+    variable_sources = {}
+    for match in re.finditer(
+            r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]{1,1200})', js):
+        sources = direct_dom_xss_sources(match.group(2), event_names)
+        if sources:
+            variable_sources.setdefault(match.group(1), set()).update(sources)
+
+    def sources_for(expression):
+        sources = direct_dom_xss_sources(expression, event_names)
+        for name, labels in variable_sources.items():
+            if re.search(r'(?<![\w$])%s(?![\w$])' % re.escape(name), expression):
+                sources.update(labels)
+        return sorted(sources)
+
+    candidates = []
+    for sink, pattern in DOM_XSS_SINKS:
+        for match in pattern.finditer(js):
+            expression = match.group(1).strip()
+            sources = sources_for(expression)
+            if not sources:
+                continue
+            rendered = re.sub(r'\s+', ' ', expression)[:180]
+            candidates.append(
+                "source=%s sink=%s expression=%s" % (",".join(sources), sink, rendered))
+    return candidates
+
+
 def file_read_query_fields(line):
     """Return file-read-shaped query fields from one METHOD -> PATH line."""
     parts = line.strip().split(None, 1)
@@ -860,6 +954,16 @@ def main():
 
     # ---- client router (reveals pages, hence features) ----------------------
     section("ROUTER PATHS", re.findall(r'path:\s*["\']([^"\']+)["\']', all_js))
+
+    # ---- DOM XSS static triage ----------------------------------------------
+    # Source-map content is included in ``blobs`` alongside downloaded bundles,
+    # so reconstructed recon/src files receive the same source-to-sink pass.
+    dom_xss = []
+    for filename, blob in blobs:
+        label = source_label(filename).replace("\\", "/")
+        dom_xss.extend("%s [origin=%s]" % (candidate, label)
+                       for candidate in dom_xss_candidates(blob))
+    section("DOM XSS CANDIDATES (source reaches sink)", dom_xss, width=600)
 
     # ---- secrets ------------------------------------------------------------
     secrets = re.findall(

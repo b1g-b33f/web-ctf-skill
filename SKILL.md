@@ -80,7 +80,7 @@ objective impact.
 | GraphQL endpoint or operation | `references/graphql.md` |
 | Reviewer/admin-bot workflow or URL-taking import/fetch/callback/webhook/avatar field | `references/xss-ssrf.md` |
 | ACAO/Vary-Origin, widget/embed/sandbox story, or unreachable 403 objective | `references/cors.md` |
-| Client-side execution, DOM/localStorage flag, URL-parsing quirk, or clean browser tier needed | `references/browser.md` |
+| `DOM XSS CANDIDATES` hit; `location`/`postMessage`/referrer/window-name data reaching a DOM sink; client-side execution, DOM/localStorage flag, URL-parsing quirk, or clean browser tier needed | `references/browser.md` |
 | Prices, quantities, vouchers, balances, or multi-step workflows | `references/logic-race.md` |
 | Any JSON body endpoint as a cheap independent check | `references/json-type-confusion.md` |
 | Rotating server/status behavior, canary instructions, or bot scoring | `references/anti-bot.md` |

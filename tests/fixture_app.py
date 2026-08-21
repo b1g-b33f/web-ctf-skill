@@ -191,7 +191,9 @@ FEED_OK = b'{"posts":[{"id":1,"caption":"otter"}]}'
 MAPPED_JS = b'// mapped bundle, no routes of its own\n//# sourceMappingURL=/mapped.js.map\n'
 VENDOR_SRC = "// vendor filler — must be excluded from the extracted src/ tree"
 APP_SRC = ('function AdminPanel(){return \'The weak signing key "correcthorse" has '
-           "revealed its true nature, a lesson in cryptographic strength.'}")
+           "revealed its true nature, a lesson in cryptographic strength.'}\n"
+           "const fragment = decodeURIComponent(location.hash.slice(1));\n"
+           "document.querySelector('#preview').innerHTML = fragment;")
 MAPPED_JS_MAP = _json.dumps({
     "version": 3,
     "file": "mapped.js",

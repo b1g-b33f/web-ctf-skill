@@ -84,6 +84,11 @@ automatically (vendor/`node_modules` excluded — typically 90%+ of a CRA/webpac
 list), reconstructing the same tree DevTools shows you. **Read `recon/src/` directly** — it's
 already the signal-only slice, worth checking before grepping the raw bundle at all.
 
+`jsmine.txt` also reports **DOM XSS CANDIDATES** from application bundles and reconstructed source:
+a recognized browser-controlled source reaching an execution-capable DOM sink, with file provenance.
+It is a static lead, not proof; inspect the exact flow and sanitizer, then validate it in a browser
+(`browser.md`).
+
 Necromancer: the flag-gate's JWT secret (`pumpkin`) was spelled out verbatim in
 `recon/src/components/AdminPanel.js` — a plain-English success-screen sentence ("The weak
 signing key \"pumpkin\" has revealed its true nature"), sitting in the *minified bundle itself*,

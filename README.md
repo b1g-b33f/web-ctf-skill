@@ -57,7 +57,7 @@ sync.
 | Tool | What it does |
 |---|---|
 | `ctf-init.sh` | Creates or resumes a challenge workspace and launches the initial recon jobs |
-| `jsharvest.py`, `jsmine.py` | Harvest application JavaScript, source maps, routes, methods, fields, and GraphQL operations |
+| `jsharvest.py`, `jsmine.py` | Harvest application JavaScript/source maps; mine routes, methods, fields, GraphQL operations, and DOM-XSS candidates |
 | `quickrecon.py`, `probe.py` | Check routes with calibrated fallback detection and authenticated/anonymous comparisons |
 | `authquick.py`, `jwtquick.py` | Test first-use account flows and the bounded JWT attack surface |
 | `sqlquick.py`, `nosqlquick.py` | Run guarded SQL and document-query injection fast tracks |
