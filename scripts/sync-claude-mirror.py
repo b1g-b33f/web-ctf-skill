@@ -4,8 +4,9 @@
 The canonical git checkout is never modified. The mirror is staged beside its
 destination, platform-specific paths/frontmatter are rewritten, and the old
 destination is moved to a timestamped backup before the staged tree is swapped
-in. Run the canonical regression suite and audit before this command, then run
-the mirror regression suite afterward.
+in. The two newest backups live outside skill discovery and older ones are
+pruned only after a successful swap. Run the canonical regression suite and
+audit before this command, then run the mirror regression suite afterward.
 """
 import argparse
 from pathlib import Path
@@ -16,6 +17,9 @@ from datetime import datetime, timezone
 
 
 ROOT = Path(__file__).resolve().parent.parent
+MAX_BACKUPS = 2
+
+
 def ignored(_directory, names):
     return {name for name in names
             if name in {".git", "__pycache__", ".DS_Store"}
@@ -76,6 +80,31 @@ def manifest(root):
     return result
 
 
+def default_backup_dir(target):
+    """Keep retained mirrors outside ~/.claude/skills discovery."""
+    return target.parent.parent / "skill-backups" / target.name
+
+
+def backup_paths(backup_dir, target):
+    prefix = target.name + ".backup-"
+    if not backup_dir.is_dir():
+        return []
+    return sorted((path for path in backup_dir.iterdir()
+                   if path.name.startswith(prefix)),
+                  key=lambda path: path.name, reverse=True)
+
+
+def prune_backups(backup_dir, target):
+    """Retain MAX_BACKUPS newest UTC-named backups after a completed swap."""
+    stale = backup_paths(backup_dir, target)[MAX_BACKUPS:]
+    for path in stale:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        else:
+            shutil.rmtree(path)
+    return stale
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Refresh the managed Claude web-ctf mirror")
     parser.add_argument(
@@ -87,12 +116,17 @@ def parse_args(argv=None):
     parser.add_argument(
         "--check", action="store_true",
         help="compare the rendered mirror with the target without changing it")
+    parser.add_argument(
+        "--backup-dir", type=Path,
+        help="directory for retained backups (default: ~/.claude/skill-backups/web-ctf)")
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
     target = args.target.expanduser().absolute()
+    backup_dir = (args.backup_dir.expanduser().absolute()
+                  if args.backup_dir else default_backup_dir(target))
     if not (ROOT / ".git").is_dir():
         print("refusing to sync: run this script from the canonical git checkout", file=sys.stderr)
         return 2
@@ -123,7 +157,8 @@ def main(argv=None):
 
         if target.exists() or target.is_symlink():
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            backup = target.with_name(target.name + ".backup-" + stamp)
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup = backup_dir / (target.name + ".backup-" + stamp)
             if backup.exists() or backup.is_symlink():
                 print("backup path already exists: %s" % backup, file=sys.stderr)
                 return 2
@@ -133,6 +168,13 @@ def main(argv=None):
         print("Claude mirror refreshed: %s" % target)
         if backup:
             print("previous install preserved: %s" % backup)
+        try:
+            stale = prune_backups(backup_dir, target)
+        except OSError as exc:
+            print("mirror refreshed, but backup pruning failed: %s" % exc, file=sys.stderr)
+            return 1
+        if stale:
+            print("pruned %d stale backup(s) from %s" % (len(stale), backup_dir))
         return 0
     finally:
         if stage and stage.exists():

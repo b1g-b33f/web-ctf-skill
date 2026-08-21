@@ -2124,7 +2124,9 @@ class ClaudeMirrorSyncRegressionTest(unittest.TestCase):
     def test_rendered_mirror_has_claude_variants_and_detects_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = os.path.join(tmp, "web-ctf")
-            proc = run_full("sync-claude-mirror.py", "--target", target)
+            backups = os.path.join(tmp, "backups")
+            proc = run_full(
+                "sync-claude-mirror.py", "--target", target, "--backup-dir", backups)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertFalse(os.path.islink(target))
             self.assertFalse(os.path.exists(os.path.join(target, ".git")))
@@ -2145,25 +2147,73 @@ class ClaudeMirrorSyncRegressionTest(unittest.TestCase):
             self.assertNotIn('".codex", "ctf-flags.log"', hook)
 
             clean = run_full(
-                "sync-claude-mirror.py", "--target", target, "--check")
+                "sync-claude-mirror.py", "--target", target, "--backup-dir", backups,
+                "--check")
             self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
             with open(os.path.join(target, "SKILL.md"), "a", encoding="utf-8") as fh:
                 fh.write("\nmirror drift\n")
             drift = run_full(
-                "sync-claude-mirror.py", "--target", target, "--check")
+                "sync-claude-mirror.py", "--target", target, "--backup-dir", backups,
+                "--check")
             self.assertEqual(drift.returncode, 1, drift.stdout + drift.stderr)
             self.assertIn("mirror drift detected", drift.stdout)
 
+    def test_successful_sync_prunes_old_backups_outside_skill_discovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "skills", "web-ctf")
+            backups = os.path.join(tmp, "skill-backups", "web-ctf")
+            first = run_full("sync-claude-mirror.py", "--target", target)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+
+            for stamp in ("20240101T000000Z", "20240201T000000Z", "20240301T000000Z"):
+                path = os.path.join(backups, "web-ctf.backup-" + stamp)
+                os.makedirs(path)
+                with open(os.path.join(path, "marker"), "w", encoding="utf-8") as fh:
+                    fh.write(stamp)
+
+            refreshed = run_full("sync-claude-mirror.py", "--target", target)
+            self.assertEqual(refreshed.returncode, 0, refreshed.stdout + refreshed.stderr)
+            self.assertIn("pruned 2 stale backup(s)", refreshed.stdout)
+            self.assertFalse(os.path.exists(os.path.join(
+                backups, "web-ctf.backup-20240101T000000Z")))
+            self.assertFalse(os.path.exists(os.path.join(
+                backups, "web-ctf.backup-20240201T000000Z")))
+            self.assertTrue(os.path.isdir(os.path.join(
+                backups, "web-ctf.backup-20240301T000000Z")))
+            retained = sorted(name for name in os.listdir(backups)
+                              if name.startswith("web-ctf.backup-"))
+            self.assertEqual(len(retained), 2)
+            self.assertFalse(any(name.startswith("web-ctf.backup-")
+                                 for name in os.listdir(os.path.dirname(target))))
+
+    def test_failed_sync_leaves_backups_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "skills", "web-ctf")
+            backups = os.path.join(tmp, "skill-backups", "web-ctf")
+            os.makedirs(backups)
+            old_backup = os.path.join(backups, "web-ctf.backup-20240101T000000Z")
+            os.makedirs(old_backup)
+            os.makedirs(os.path.dirname(target))
+            os.symlink(os.path.dirname(SCRIPTS), target)
+
+            refused = run_full("sync-claude-mirror.py", "--target", target)
+            self.assertEqual(refused.returncode, 2, refused.stdout + refused.stderr)
+            self.assertTrue(os.path.isdir(old_backup))
+
     def test_initial_canonical_symlink_requires_explicit_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:
-            target = os.path.join(tmp, "web-ctf")
+            target = os.path.join(tmp, "skills", "web-ctf")
+            backups = os.path.join(tmp, "backups")
+            os.makedirs(os.path.dirname(target))
             os.symlink(os.path.dirname(SCRIPTS), target)
-            refused = run_full("sync-claude-mirror.py", "--target", target)
+            refused = run_full(
+                "sync-claude-mirror.py", "--target", target, "--backup-dir", backups)
             self.assertEqual(refused.returncode, 2, refused.stdout + refused.stderr)
             self.assertIn("use --replace-symlink", refused.stderr)
 
             replaced = run_full(
-                "sync-claude-mirror.py", "--target", target, "--replace-symlink")
+                "sync-claude-mirror.py", "--target", target, "--backup-dir", backups,
+                "--replace-symlink")
             self.assertEqual(replaced.returncode, 0, replaced.stdout + replaced.stderr)
             self.assertFalse(os.path.islink(target))
             self.assertIn("previous install preserved", replaced.stdout)

@@ -48,6 +48,8 @@ changes. A maintenance handoff is complete when both suites pass, the audit pass
 
 The sync script intentionally rewrites Codex paths, hook language, and invocation frontmatter for
 Claude Code. Do not flatten those platform differences by copying files over the mirror manually.
+It retains the two newest previous mirrors under `~/.claude/skill-backups/web-ctf`, outside
+Claude's skill-discovery directory, and prunes older backups only after a successful swap.
 
 ## Consistency audit
 
