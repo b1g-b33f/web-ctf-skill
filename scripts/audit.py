@@ -47,7 +47,7 @@ scripts = sorted(os.path.basename(p) for p in
                  + glob.glob("scripts/*/*.py"))
 refs = sorted(os.path.basename(p) for p in glob.glob("references/*.md"))
 readme, skill = read("README.md"), read("SKILL.md")
-docs = ["README.md", "SKILL.md"] + ["references/" + r for r in refs]
+docs = ["README.md", "CONTRIBUTING.md", "SKILL.md"] + ["references/" + r for r in refs]
 
 # 1. every script is documented ------------------------------------------------
 for s in scripts:
@@ -93,7 +93,8 @@ HOSTPATH = re.compile(
     r'(?:C:\\|C:/|/c/)(?!Program Files/Git)[A-Za-z0-9_]'
     r'|(?:~|\$HOME)/(?:Offsec/Web_CTF|Obsidian)/[A-Za-z]'
     r'|/opt/security-tools/[A-Za-z]')
-have_paths = {d for d in docs if d != "README.md" and HOSTPATH.search(read(d))}
+have_paths = {d for d in docs if d not in {"README.md", "CONTRIBUTING.md"}
+              and HOSTPATH.search(read(d))}
 
 porting = readme.split("## Porting")[-1] if "## Porting" in readme else ""
 listed = set()
