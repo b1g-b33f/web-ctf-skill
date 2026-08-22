@@ -78,7 +78,7 @@ objective impact.
 | Reflected/rendered input or controllable response-only placeholder field | `references/ssti.md` |
 | Filename/path/template/download field, dynamic resource, upload filename, or `lfi-signals.txt` hit | `references/traversal-upload.md` |
 | GraphQL endpoint or operation | `references/graphql.md` |
-| Reviewer/admin-bot workflow or URL-taking import/fetch/callback/webhook/avatar field | `references/xss-ssrf.md` |
+| Realtime event reaching an HTML sink; reviewer/admin-bot workflow; or URL-taking import/fetch/callback/webhook/avatar field | `references/xss-ssrf.md` |
 | ACAO/Vary-Origin, widget/embed/sandbox story, or unreachable 403 objective | `references/cors.md` |
 | `DOM XSS CANDIDATES` hit; `location`/`postMessage`/referrer/window-name data reaching a DOM sink; client-side execution, DOM/localStorage flag, URL-parsing quirk, or clean browser tier needed | `references/browser.md` |
 | Prices, quantities, vouchers, balances, or multi-step workflows | `references/logic-race.md` |

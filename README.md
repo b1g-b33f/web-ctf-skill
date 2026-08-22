@@ -57,9 +57,9 @@ sync.
 | Tool | What it does |
 |---|---|
 | `ctf-init.sh` | Creates or resumes a challenge workspace and launches the initial recon jobs |
-| `jsharvest.py`, `jsmine.py` | Harvest application JavaScript/source maps; mine routes, methods, fields, GraphQL operations, and DOM-XSS candidates |
+| `jsharvest.py`, `jsmine.py` | Harvest application JavaScript/source maps; mine routes, methods, fields, GraphQL operations, and DOM/realtime-XSS candidates |
 | `quickrecon.py`, `probe.py` | Check routes with calibrated fallback detection and authenticated/anonymous comparisons |
-| `authquick.py`, `jwtquick.py` | Test first-use account flows and the bounded JWT attack surface |
+| `authquick.py`, `jwtquick.py` | Test first-use account flows and the bounded JWT attack surface over Bearer or cookie transport |
 | `sqlquick.py`, `nosqlquick.py` | Run guarded SQL and document-query injection fast tracks |
 | `cmdiquick.py` | Detect command injection across POSIX, cmd.exe, and PowerShell contexts |
 | `lfiquick.py` | Test bounded Linux and Windows traversal/LFI paths and bypass families |
@@ -82,7 +82,7 @@ bash ~/.codex/skills/web-ctf/scripts/ctf-init.sh <target> <name> <platform>
 
 # test a JWT against a route that genuinely refuses the original token
 python3 ~/.codex/skills/web-ctf/scripts/jwtquick.py \
-  --token "$TOKEN" --base <target> --test /api/admin/stats
+  --token "$TOKEN" --base <target> --control /api/me --test /api/admin/stats
 
 # test one known-valid file parameter for traversal/LFI
 python3 ~/.codex/skills/web-ctf/scripts/lfiquick.py \
@@ -97,13 +97,14 @@ python3 ~/.codex/skills/web-ctf/scripts/oob.py --name <challenge>
 
 The harness expects Python 3 and a POSIX shell. Individual techniques can also use feroxbuster,
 nuclei, sqlmap, ffuf, cloudflared, ngrok, SecLists, and `jwt_tool`. Missing optional tools do not
-prevent unrelated parts of the workflow from running.
+prevent unrelated parts of the workflow from running; missing wordlists are reported as loud
+skips, never empty scan results.
 
 | Variable | Purpose | Default |
 |---|---|---|
 | `CTF_ROOT` | Challenge workspaces | `~/Offsec/Web_CTF/CTF` |
-| `SECLISTS` | SecLists checkout | `/opt/security-tools/SecLists` |
-| `ROCKYOU` | Large fallback password list | `$SECLISTS/Passwords/Leaked-Databases/rockyou.txt` |
+| `SECLISTS` | SecLists checkout | First existing: `/opt/security-tools/SecLists`, `/usr/share/seclists`, `~/Tools/SecLists` |
+| `ROCKYOU` | Large fallback password list | `$SECLISTS/Passwords/Leaked-Databases/rockyou.txt`, then `/usr/share/wordlists/rockyou.txt` |
 | `CLOUDFLARED`, `NGROK` | Tunnel binaries used by `oob.py` | Commands on `PATH` |
 | `NOTES_VAULT` | Optional personal writeup vault | `~/Obsidian/Pentesting notes/02-AppSec` |
 

@@ -287,20 +287,99 @@ def message_event_names(js):
     """Return callback variables that receive postMessage event objects."""
     names = set()
     patterns = (
-        r'\baddEventListener\s*\(\s*["\']message["\']\s*,\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)',
-        r'\bonmessage\s*=\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)',
+        r'(?<![\w$.])addEventListener\s*\(\s*["\']message["\']\s*,\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)',
+        r'\bwindow\s*\.\s*addEventListener\s*\(\s*["\']message["\']\s*,\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)',
+        r'(?<![\w$.])onmessage\s*=\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)',
+        r'\bwindow\s*\.\s*onmessage\s*=\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)',
     )
     for pattern in patterns:
         names.update(re.findall(pattern, js, re.I))
     return names
 
 
-def direct_dom_xss_sources(text, event_names):
+def callback_body_span(js, parameter_end):
+    """Return the bounded source span of a simple function/arrow callback."""
+    tail = js[parameter_end:parameter_end + 240]
+    arrow = tail.find("=>")
+    cursor = parameter_end + arrow + 2 if arrow >= 0 else parameter_end
+    brace = js.find("{", cursor, min(len(js), cursor + 160))
+    semicolon = js.find(";", cursor, min(len(js), cursor + 160))
+    if brace < 0 or (arrow >= 0 and semicolon >= 0 and semicolon < brace):
+        end_candidates = [value for value in
+                          (js.find(";", cursor), js.find("\n", cursor)) if value >= 0]
+        return cursor, min(end_candidates) if end_candidates else min(len(js), cursor + 1000)
+
+    depth, quote, escaped = 1, None, False
+    for index, char in enumerate(js[brace + 1:], brace + 1):
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in "'\"`":
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return brace + 1, index
+    return brace + 1, min(len(js), brace + 12000)
+
+
+def realtime_event_sources(js):
+    """Return scoped Socket.IO, WebSocket, and EventSource callback sources."""
+    object_types = {}
+    for match in re.finditer(
+            r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+(WebSocket|EventSource)\b',
+            js, re.I):
+        object_types[match.group(1)] = match.group(2)
+
+    socket_names = set(re.findall(
+        r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:io\s*\(|new\s+(?:Manager|Socket)\b)',
+        js, re.I))
+    socket_names.update(re.findall(
+        r'\b([A-Za-z_$][\w$]*(?:socket|sock)[A-Za-z0-9_$]*)\s*\.\s*on\s*\(',
+        js, re.I))
+
+    sources = []
+
+    def add(parameter, label, require_data, parameter_end):
+        start, end = callback_body_span(js, parameter_end)
+        sources.append((parameter, label, require_data, start, end))
+
+    for name in socket_names:
+        pattern = (r'(?<![\w$])%s\s*\.\s*on\s*\(\s*(["\'])([^"\']+)\1\s*,\s*'
+                   r'(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)' % re.escape(name))
+        for match in re.finditer(pattern, js, re.I):
+            add(match.group(3), "Socket.IO:%s" % match.group(2), False, match.end(3))
+
+    for name, kind in object_types.items():
+        patterns = (
+            r'(?<![\w$])%s\s*\.\s*onmessage\s*=\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)' % re.escape(name),
+            r'(?<![\w$])%s\s*\.\s*addEventListener\s*\(\s*["\']message["\']\s*,\s*(?:function\s*)?\(?\s*([A-Za-z_$][\w$]*)' % re.escape(name),
+        )
+        for pattern in patterns:
+            for match in re.finditer(pattern, js, re.I):
+                add(match.group(1), "%s.message" % kind, True, match.end(1))
+    return sources
+
+
+def direct_dom_xss_sources(text, event_names, realtime_sources, position=None):
     """Return recognized client-controlled values used by one expression."""
     found = {name for name, pattern in DOM_XSS_DIRECT_SOURCES if pattern.search(text)}
     for event_name in event_names:
         if re.search(r'(?<![\w$])%s\s*\.\s*data\b' % re.escape(event_name), text):
             found.add("postMessage.data")
+    for parameter, label, require_data, start, end in realtime_sources:
+        if position is not None and not start <= position <= end:
+            continue
+        suffix = r'\s*\.\s*data\b' if require_data else r'(?![\w$])'
+        if re.search(r'(?<![\w$])%s%s' % (re.escape(parameter), suffix), text):
+            found.add(label)
     return found
 
 
@@ -313,15 +392,18 @@ def dom_xss_candidates(js):
     of the actual data flow, sanitizer, and sink context.
     """
     event_names = message_event_names(js)
+    realtime_sources = realtime_event_sources(js)
     variable_sources = {}
     for match in re.finditer(
             r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]{1,1200})', js):
-        sources = direct_dom_xss_sources(match.group(2), event_names)
+        sources = direct_dom_xss_sources(
+            match.group(2), event_names, realtime_sources, match.start(2))
         if sources:
             variable_sources.setdefault(match.group(1), set()).update(sources)
 
-    def sources_for(expression):
-        sources = direct_dom_xss_sources(expression, event_names)
+    def sources_for(expression, position):
+        sources = direct_dom_xss_sources(
+            expression, event_names, realtime_sources, position)
         for name, labels in variable_sources.items():
             if re.search(r'(?<![\w$])%s(?![\w$])' % re.escape(name), expression):
                 sources.update(labels)
@@ -331,7 +413,7 @@ def dom_xss_candidates(js):
     for sink, pattern in DOM_XSS_SINKS:
         for match in pattern.finditer(js):
             expression = match.group(1).strip()
-            sources = sources_for(expression)
+            sources = sources_for(expression, match.start(1))
             if not sources:
                 continue
             rendered = re.sub(r'\s+', ' ', expression)[:180]

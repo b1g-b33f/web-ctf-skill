@@ -25,7 +25,17 @@ NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-'
 
 # Overridable so this works off any machine's layout without editing the script.
 CTF_ROOT="${CTF_ROOT:-$HOME/Offsec/Web_CTF/CTF}"
-SECLISTS="${SECLISTS:-/opt/security-tools/SecLists}"
+if [[ -z "${SECLISTS:-}" ]]; then
+  for SECLISTS_CANDIDATE in \
+    /opt/security-tools/SecLists /usr/share/seclists "$HOME/Tools/SecLists"; do
+    if [[ -d "$SECLISTS_CANDIDATE" ]]; then
+      SECLISTS="$SECLISTS_CANDIDATE"
+      break
+    fi
+  done
+  SECLISTS="${SECLISTS:-/opt/security-tools/SecLists}"
+fi
+FEROX_WORDLIST="$SECLISTS/Discovery/Web-Content/raft-medium-directories.txt"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 WORKDIR="$CTF_ROOT/$NAME"
@@ -269,8 +279,14 @@ JOB_QUICK=$!
 # ── Job 3: feroxbuster directory brute-force ─────────────────────────────────
 (
   echo "[job:ferox] starting"
-  if feroxbuster -u "$TARGET" \
-    -w "$SECLISTS/Discovery/Web-Content/raft-medium-directories.txt" \
+  if [[ ! -f "$FEROX_WORDLIST" ]]; then
+    echo "[job:ferox] skipped — wordlist missing: $FEROX_WORDLIST"
+    echo "SKIPPED: wordlist missing: $FEROX_WORDLIST" > "$RECON/ferox.log"
+  elif ! command -v feroxbuster >/dev/null 2>&1; then
+    echo "[job:ferox] skipped — feroxbuster is not on PATH"
+    echo "SKIPPED: feroxbuster is not on PATH" > "$RECON/ferox.log"
+  elif feroxbuster -u "$TARGET" \
+    -w "$FEROX_WORDLIST" \
     --depth 2 -t 20 --timeout 8 -q \
     -o "$RECON/ferox.txt" > "$RECON/ferox.log" 2>&1; then
     echo "[job:ferox] done — $(match_count '^[0-9]{3} ' "$RECON/ferox.txt") hits"

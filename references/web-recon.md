@@ -206,6 +206,12 @@ ffuf -u <target>/api/FUZZ -w <wordlist> -mc all -fs <fallback-size> -t 8
 ```
 Get `<fallback-size>` by requesting a guaranteed-bogus path first. Verify with a canary wordlist containing one known-good entry before trusting an empty result set — and never pipe ffuf through a grep that can swallow the results table.
 
+Preflight every `-w` path with `test -f <wordlist>`. A missing list is **UNTESTED**, not an empty
+negative. `ctf-init.sh` performs this check for feroxbuster and prints the exact missing path both
+to the terminal and `recon/ferox.log`; apply the same loud-skip rule to manual ffuf/dirsearch runs.
+When one stale hardcoded tool path appears, search the entire harness/config rather than fixing only
+the command that happened to fail.
+
 If fuzzing finds new endpoints → back to probing.
 
 ## 5. Where wordlist brute force structurally fails

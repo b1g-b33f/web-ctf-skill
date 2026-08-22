@@ -30,7 +30,11 @@ curl -si -X PATCH <target>/api/user/<your-id> $AUTH_HEADER \
   -H 'Content-Type: application/json' -d '{"role":"admin"}'
 ```
 
-After each attempt, **re-fetch your profile to confirm the field actually changed** (a 200 does not mean the write landed) and re-probe every previously-403'd endpoint.
+After each attempt, **re-fetch your profile and re-probe the gated route**. A `200 updated`,
+`200 registered`, or response echoing the submitted field proves only that the request was
+accepted; serializers commonly accept and ignore unknown/protected fields. The privilege is
+confirmed only when stored state changes or the previously denied capability opens. Prefer a
+safe no-op action on the gated route when verification would otherwise mutate shared state.
 
 ## C. BFLA — the guard that was never mounted on one verb
 

@@ -355,6 +355,11 @@ class RegressionTest(unittest.TestCase):
                 fh.write("echo FEROX_PROGRESS_NOISE\n")
                 fh.write("echo '200      GET       10l       20w      300c http://fixture/health' > \"$out\"\n")
             os.chmod(ferox, 0o755)
+            wordlist = os.path.join(
+                tmp, "Discovery", "Web-Content", "raft-medium-directories.txt")
+            os.makedirs(os.path.dirname(wordlist))
+            with open(wordlist, "w", encoding="utf-8") as fh:
+                fh.write("health\n")
 
             env = {**os.environ, "CTF_ROOT": tmp, "SECLISTS": tmp,
                    "PATH": fake_bin + os.pathsep + os.environ.get("PATH", "")}
@@ -383,6 +388,36 @@ class RegressionTest(unittest.TestCase):
                               "public auth-artifact inbox missing from direct quickcheck guesses")
             self.assertNotIn("0\n0 hits", out,
                              "empty grep count printed two zeroes instead of one")
+
+    def test_ctf_init_skips_missing_ferox_wordlist_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            challenge = "fixture-ferox-missing-wordlist"
+            fake_bin = os.path.join(tmp, "bin")
+            os.makedirs(fake_bin)
+            marker = os.path.join(tmp, "ferox-was-run")
+            ferox = os.path.join(fake_bin, "feroxbuster")
+            with open(ferox, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\n")
+                fh.write("touch \"$FEROX_MARKER\"\n")
+            os.chmod(ferox, 0o755)
+            missing_root = os.path.join(tmp, "missing-seclists")
+            env = {**os.environ, "CTF_ROOT": tmp, "SECLISTS": missing_root,
+                   "FEROX_MARKER": marker,
+                   "PATH": fake_bin + os.pathsep + os.environ.get("PATH", "")}
+            proc = subprocess.run(
+                ["bash", os.path.join(SCRIPTS, "ctf-init.sh"), self.base_url,
+                 challenge, "bugforge"], capture_output=True, text=True,
+                timeout=30, env=env)
+            out = proc.stdout + proc.stderr
+            expected = os.path.join(
+                missing_root, "Discovery", "Web-Content", "raft-medium-directories.txt")
+            self.assertEqual(proc.returncode, 0, out)
+            self.assertIn("wordlist missing: " + expected, out)
+            self.assertFalse(os.path.exists(marker),
+                             "feroxbuster ran despite a nonexistent -w path")
+            log_path = os.path.join(tmp, challenge, "recon", "ferox.log")
+            with open(log_path, encoding="utf-8") as fh:
+                self.assertIn("SKIPPED: wordlist missing: " + expected, fh.read())
 
     def test_ctf_init_isolates_reprovisioned_instances_and_updates_current_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -461,6 +496,15 @@ class JwtquickWordlistChainTest(unittest.TestCase):
         self.assertNotIn("escalating to rockyou", out,
                           "--wordlist must pin a single list, not chain:\n" + out)
         self.assertNotIn("SECRET =", out)
+
+    def test_missing_explicit_wordlist_is_loud_and_inconclusive(self):
+        token = make_jwt({"id": 1, "role": "user"}, "correcthorse")
+        missing = os.path.join(self.tmp.name, "does-not-exist.txt")
+        proc = run_full("jwtquick.py", "--token", token, "--wordlist", missing,
+                        env=self.env)
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("wordlist not found: " + missing, proc.stdout)
+        self.assertIn("secret-crack coverage INCOMPLETE", proc.stdout)
 
 
 class JsmineDynamicRoutesTest(unittest.TestCase):
@@ -730,6 +774,32 @@ preview.innerHTML = fixedMarkup;
             self.assertNotIn("textContent", body)
             self.assertNotIn("fixedMarkup", body)
             self.assertEqual(body.count("source="), 2, body)
+
+    def test_realtime_payloads_reaching_html_sinks_are_candidates(self):
+        source_text = r'''
+const socket = io();
+socket.on("account-updated", (payload) => {
+  const notice = payload.message;
+  feed.innerHTML = notice;
+});
+const stream = new EventSource("/api/events");
+stream.onmessage = (event) => panel.insertAdjacentHTML("beforeend", event.data);
+const ws = new WebSocket("wss://example.test/ws");
+ws.addEventListener("message", (frame) => output.innerHTML = frame.data);
+socket.on("safe-event", (payload) => safe.textContent = payload.message);
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "RealtimePanel.js")
+            with open(source, "w", encoding="utf-8") as fh:
+                fh.write(source_text)
+            proc = run_full("jsmine.py", source)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = re.search(
+                r'=== DOM XSS CANDIDATES.*?(?=\n===|\Z)', proc.stdout, re.S).group(0)
+            self.assertIn("source=Socket.IO:account-updated sink=innerHTML expression=notice", body)
+            self.assertIn("source=EventSource.message sink=insertAdjacentHTML expression=event.data", body)
+            self.assertIn("source=WebSocket.message sink=innerHTML expression=frame.data", body)
+            self.assertNotIn("safe.textContent", body)
 
 
 class ProbeSkippedWriteTest(unittest.TestCase):
@@ -1135,6 +1205,44 @@ class JwtquickBaselineRejectionTest(unittest.TestCase):
         self.assertNotIn("firing", proc.stdout)
 
 
+class JwtquickCookieTransportTest(unittest.TestCase):
+    """A low-privilege denial does not prove that a JWT reached the application.
+
+    The same 401/403 can result when a cookie-authenticated app silently ignores a
+    Bearer header. A known authenticated control must distinguish the real token
+    from an invalid token over the selected transport before forged candidates run.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_cookie_transport_control_and_roleless_identity_swap(self):
+        token = make_jwt({"id": 2, "username": "user"}, "irrelevant")
+        proc = run_full(
+            "jwtquick.py", "--token", token, "--no-crack", "--base", self.base_url,
+            "--control", "/api/jwt-cookie/me", "--test", "/api/jwt-cookie/admin",
+            "--cookie-name", "auth_token", "--target-id", "1")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("transport verified", proc.stdout)
+        self.assertIn("no privilege claim", proc.stdout)
+        self.assertIn("alg:none:id=1", proc.stdout)
+        self.assertIn("POSSIBLE BYPASS", proc.stdout)
+
+    def test_wrong_bearer_transport_fails_control_before_forgery(self):
+        token = make_jwt({"id": 2, "username": "user"}, "irrelevant")
+        proc = run_full(
+            "jwtquick.py", "--token", token, "--no-crack", "--base", self.base_url,
+            "--control", "/api/jwt-cookie/me", "--test", "/api/jwt-cookie/admin")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("was not proven", proc.stdout)
+        self.assertNotIn("firing", proc.stdout)
+
+
 class JsharvestReharvestTest(unittest.TestCase):
     """A second jsharvest.py pass over the same --out dir (e.g. re-running after
     login) must reuse a byte-identical bundle/source map instead of piling up
@@ -1425,6 +1533,29 @@ class NosqlquickRegressionTest(unittest.TestCase):
             proc = run_full("nosqlquick.py", *args, timeout=30)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("extracted backupCode = bug{aZ9}", proc.stdout)
+
+    def test_nested_query_operators_require_dollar_and_keep_full_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "nosqlquick.py", "--url", self.base_url + "/api/items",
+                "--query-container", "filter", "--field", "is_public",
+                "--baseline", "is_public=true", "--delay", "0", "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("bare [ne]", proc.stdout)
+            self.assertIn("[$ne]", proc.stdout)
+            self.assertIn("CANDIDATE", proc.stdout)
+            self.assertIn("FLAG:", proc.stdout,
+                          "the complete expanded list must be scanned, not just its first row")
+            bare = os.path.join(tmp, "responses", "query-is_public-bare-ne-control.body")
+            injected = os.path.join(tmp, "responses", "query-is_public-ne.body")
+            with open(bare, encoding="utf-8") as fh:
+                self.assertNotIn('"name": "private"', fh.read())
+            with open(injected, encoding="utf-8") as fh:
+                body = fh.read()
+            self.assertIn('"name": "public-one"', body,
+                          "$ne type juggling can retain public rows")
+            self.assertIn('"name": "private"', body,
+                          "the full result set must expose the added private row")
 
     def test_auth_and_password_fields_require_explicit_dangerous_opt_in(self):
         proc = run_full(

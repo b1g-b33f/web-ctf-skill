@@ -172,6 +172,18 @@ A generically-named param (`filter`, `where`, `query`, `criteria`) may accept a 
 ```bash
 curl -si "<target>/api/<listing>?filter[<field>][\$ne]=true" $AUTH_HEADER
 curl -si "<target>/api/<listing>?filter[<field>][\$exists]=true" $AUTH_HEADER
+
+python3 ~/.codex/skills/web-ctf/scripts/nosqlquick.py \
+  --url "<target>/api/<listing>" --query-container filter \
+  --field <field> --baseline <field>=<known-public-value> --probe
 ```
 
-Take candidate `<field>` names from the boolean/flag fields the endpoint's own JSON already returns (`is_public`, `is_admin`, `role`, `deleted`).
+The dollar sign is semantic, not decoration: `filter[field][ne]=1` is a bare `ne` property and
+often silently no-ops. The helper retains it as a control, then sends `$ne`, `$gt`, `$exists`, and
+`$regex` and saves every complete response under `responses/`. Inspect the full expanded result
+set. In particular, `$ne=1` against a boolean/integer field can retain all public rows through
+string/type mismatch while adding one private row, so unchanged first-row/count-at-a-glance
+checks create false negatives. Scan every row and every retained body for private data and flags.
+
+Take candidate `<field>` names from the boolean/flag fields the endpoint's own JSON already
+returns (`is_public`, `is_admin`, `role`, `deleted`).

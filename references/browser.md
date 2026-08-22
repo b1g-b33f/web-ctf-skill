@@ -13,7 +13,8 @@ hits a permission gate — expected.
 `jsharvest.py` passes both downloaded bundles and reconstructed source-map files under `recon/src/`
 through `jsmine.py`. Its **DOM XSS CANDIDATES** section reports only a recognized browser-controlled
 source reaching a likely execution sink in one application file, with provenance. Sources include
-`location.hash/search/href`, `document.URL`/`referrer`, `window.name`, and message-event `data`;
+`location.hash/search/href`, `document.URL`/`referrer`, `window.name`, postMessage `data`, and
+Socket.IO/WebSocket/EventSource callback payloads;
 sinks include `innerHTML`, `insertAdjacentHTML`, `document.write`, React
 `dangerouslySetInnerHTML`, `srcdoc`, parser/fragment APIs, jQuery HTML insertion, and string-eval
 surfaces.
@@ -21,6 +22,7 @@ surfaces.
 A candidate is not a finding: inspect the data flow, any decoding/sanitization, and the sink's
 actual context. Confirm a controllable payload in the browser before claiming execution. A plain
 sink with no reported source, or a source rendered through `textContent`, is not enough.
+For cross-user realtime delivery and privileged-bot impact, continue in `xss-ssrf.md`.
 
 ## Use it for
 

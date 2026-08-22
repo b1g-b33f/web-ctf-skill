@@ -4,6 +4,31 @@
 - **Flag is client-side and fires in *your* view** (DOM/reflected XSS, flag in DOM/`localStorage`/a JS var): you need a JS-executing client to confirm execution and read it out → `browser.md`. curl can't tell "executed" from "merely reflected."
 - **A privileged bot visits your payload** (the section below): the exploit fires in *the lab's* browser, not yours. Use curl + tunnel + listener. The browser pane can only pre-flight that your payload page renders.
 
+## Realtime stored-XSS delivery
+
+Do not require a report/comment button before testing stored XSS. Search application bundles and
+reconstructed source for `socket.on(`, `EventSource`, WebSocket `onmessage`, and message callbacks
+whose payload reaches `innerHTML`, `insertAdjacentHTML`, jQuery `.html()`, or
+`dangerouslySetInnerHTML`. `jsmine.py` reports simple realtime source-to-sink flows in `DOM XSS
+CANDIDATES`; vendor Socket.IO code stays quarantined so it does not create the lead by itself.
+
+One user's ordinary action may emit an attacker-controlled field into another user's/admin bot's
+DOM. Connect a self-controlled client first and log event names/payloads (`socket.onAny(...)` for
+Socket.IO). If the client chooses a subscription key from `localStorage.user.id`, changing that
+local value can reveal the delivery template, but it does not prove server-side authorization;
+use it only to understand the sink and reproduce with your own identities.
+
+Choose payload encoding from the sink position. In a text-node HTML template such as
+`<span>${value}</span>`, a raw `<img src=x onerror=...>` creates a node while `&lt;img...&gt;` is
+inert text. Encode only when an intervening decode is observed before reparsing. Confirm the
+actual flow in a real browser rather than inferring execution from reflection.
+
+If a field-specific WAF rejects literal angle brackets, test inspection length as a measured
+hypothesis: keep the same valid request, prepend inert filler before a tagged payload, and
+binary-search a bounded body-size range. Require the payload to arrive intact and execute; a
+`200` alone can still mean truncation or accept-and-ignore. Never reuse one lab's cutoff as a
+constant, and stop on throttling, gateway instability, or material side effects.
+
 ## H. XSS + admin bot — report / submit-for-review features
 
 Applies when there's an "admin reviews your submission" workflow, a report link, or a contact form.
@@ -57,6 +82,13 @@ send("alive", location.href + " | ua=" + navigator.userAgent + " | ck=" + docume
 The `alive` beacon is the highest-value line in the payload. On Vaultly-010 it revealed the bot
 was headless Chrome on **`http://localhost:3001`**, not the advertised public hostname — which
 explains which fetches are same-origin vs cross-origin, and therefore which need CORS at all.
+
+An HttpOnly session cookie cannot be read by JavaScript, but it is still attached to same-origin
+requests. When `document.cookie` is empty, stop trying to steal it: send the `alive` beacon first,
+then use the victim session for the smallest safe state-changing request that proves impact
+(for example, email/password recovery or a no-op privilege action). Verify the resulting account
+state independently. The beacon separates “the bot executed” from “the state-change endpoint or
+payload was wrong” and records the bot's real origin before takeover logic runs.
 
 ```bash
 # tunnel first — see the note below on ngrok vs cloudflared

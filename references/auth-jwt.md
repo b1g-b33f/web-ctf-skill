@@ -94,8 +94,13 @@ that's exactly what the second stage is for, not an unlikely-to-pay-off escape h
 
 ```bash
 python3 ~/.codex/skills/web-ctf/scripts/jwtquick.py --token "$TOKEN" \
-  --base <target> --test /api/admin/stats
+  --base <target> --control /api/me --test /api/admin/stats
 ```
+
+Use the transport the application actually uses. A protected route denying a Bearer token does
+not prove that a cookie-authenticated app parsed it; the same denial occurs when the header is
+ignored. For a JWT carried in `Set-Cookie`, add `--cookie-name <name>`. The `--control` path must
+accept the original token and deny an invalid token before the helper fires forgeries.
 
 One call does: decode → dictionary-crack (chained, see above) → mint `alg:none` × 4 → mint
 privilege-escalated and id-swapped forgeries → fire all of them at a route that currently
@@ -157,6 +162,13 @@ believing it would have killed a live, winning vector.
 
 Corollary: the forged identity usually doesn't need to exist or match. A token minted for an
 unrelated user id with `role:"admin"` worked identically; only the authorizing claim mattered.
+
+If the JWT has no role/permission claim, determine whether the server reloads authorization from
+the identity claim. In that design, adding `role=admin` is irrelevant, but the token path is not
+automatically dead: a weak signature can still substitute the privileged `sub`/`id`/`userId`.
+`jwtquick.py` retains identity-swap candidates for role-less tokens; set `--target-id` when the
+privileged identifier is known. Pivot fully to reset/takeover only after signature bypass and
+identity substitution are ruled out.
 
 **If it doesn't crack**, mark JWT-forge as killed in `WORKLOG.md` and move on — do not return
 without new information (a leaked secret, a JWKS write primitive). Also verify the verifier
@@ -226,6 +238,9 @@ Then brute the window against `reset-password` (a few hundred candidates, ~16 th
 
 **Finding the target's email address.** Prefer an oracle on the **write path** over a side-effect path:
 - *Write path (reliable):* registration uniqueness. `POST /api/register` with a throwaway unique username + candidate email → a combined `"Username or email already exists"` proves the **email** exists.
+- *Direct reset oracle:* compare a known-real self account with a randomized nonexistent account.
+  A stable `200` for the real identity versus `400`/`not found` for the unknown identity confirms
+  enumeration; use it to test the candidate admin username before spending a reset-code budget.
 - *Side-effect path (unreliable):* "did a reset email arrive in the dev mailbox?" — routinely filtered for seeded/admin accounts and will give **false negatives**. On Tanuki `admin@tanuki.app` was in the first six guesses, produced no mail, and got wrongly eliminated; the register oracle flagged it instantly.
 
 Never let one negative oracle eliminate a candidate. Confirm with a structurally different second oracle.
@@ -235,3 +250,25 @@ Also test on the reset endpoint:
 - SQL/NoSQL metacharacters and `%`/`_` LIKE wildcards in the email lookup
 - alternate field names on forgot-password (`username`, `login`, `identifier`)
 - whether a dev "mailcatcher" page (`/api/email`, `/mail`, `/dev/mail`) is reachable **unauthenticated**
+
+### Numeric OTP / PIN viability
+
+Never infer six digits or call a code bruteable from its appearance. Measure both dimensions on
+your own account before touching the target identity:
+
+1. **Length/keyspace:** read `maxLength`, `pattern="\\d{N}"`, a fixed input grid, or submit
+   different widths and distinguish wrong-format from valid-width/invalid-code responses.
+   The numeric space is `10^N`.
+2. **Controls and usable lifetime:** send a bounded wrong-code batch (for example, up to 30),
+   stopping immediately on `429`, account/IP lockout, first-miss invalidation, or gateway errors.
+   Measure accepted guesses/second at the intended concurrency. For expiry, inspect disclosed
+   metadata/source or issue separate self-account codes and redeem each once after different
+   delays; repeatedly submitting one correct code is invalid when success consumes it.
+
+Let `K=10^N`, `R` be measured non-throttled guesses/second, and `T` the remaining usable lifetime
+after issuance and setup. Sweep only when `K/R` fits comfortably inside `T` and no observed cap
+binds first. Fixed claims such as “four digits at 40 workers takes 30 seconds” are not portable;
+RTT and server throughput decide `R`. When viable, request a fresh code immediately before the
+bounded concurrent sweep, stop on the first next-stage artifact, and replay that artifact through
+the normal reset endpoint. Otherwise pivot to entropy, leakage, predictable generation, or a
+cross-flow consumer instead of burning the code or locking the account.

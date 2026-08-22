@@ -61,6 +61,7 @@ Routes:
                               unknown path (and every unimplemented quickcheck guess)
                               must resolve to
 """
+import base64
 import json as _json
 import re
 import sqlite3
@@ -223,6 +224,12 @@ NOSQL_DOCS = [
     {"email": "alpha@example.test", "backupCode": "ALPHA-1", "username": "alpha"},
     {"email": "whiskers@example.test", "backupCode": "bug{aZ9}", "username": "whiskers"},
 ]
+NOSQL_LIST_DOCS = [
+    {"id": 1, "name": "public-one", "is_public": True},
+    {"id": 2, "name": "public-two", "is_public": True},
+    {"id": 3, "name": "private", "is_public": False,
+     "flag": "bug{NosqlFilterRegression_<nonce>}"},
+]
 
 TEMPLATE_FLAG = "bug" + "{example_template_variable_fixture}"
 CMDI_FLAG = "bug" + "{CmdiQuickRegression123}"
@@ -369,6 +376,19 @@ def _cookie_value(header, name):
     return None
 
 
+def _unverified_jwt_payload(token):
+    """Decode only enough JWT structure to model a deliberately weak fixture verifier."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        raw = parts[1] + "=" * (-len(parts[1]) % 4)
+        data = _json.loads(base64.urlsafe_b64decode(raw.encode()).decode())
+        return data if isinstance(data, dict) else None
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
 def _mongo_match(actual, wanted):
     if not isinstance(wanted, dict):
         return actual == wanted
@@ -391,7 +411,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route(self, data=None):
         path = self.path.split("?", 1)[0]
-        query = parse_qs(urlparse(self.path).query)
+        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
         if path == "/":
             return 200, "text/html", SPA_HTML
         if path == "/login":
@@ -738,6 +758,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/cmdi/teapot" and self.command == "POST":
             data = data if isinstance(data, dict) else {}
             return 418, "application/json", _cmdi_body(data.get("rollOptions", ""))
+        if path == "/api/items" and self.command == "GET":
+            # A bare [ne] key is ignored and falls back to public rows. The real
+            # $-prefixed operators reach a Mongoose-style nested filter and return
+            # all rows, including the private record; $ne=1 models string-vs-boolean
+            # type juggling where even the public rows remain in the response.
+            operator_keys = (
+                "filter[is_public][$ne]", "filter[is_public][$gt]",
+                "filter[is_public][$exists]", "filter[is_public][$regex]",
+            )
+            rows = (NOSQL_LIST_DOCS if any(key in query for key in operator_keys)
+                    else [row for row in NOSQL_LIST_DOCS if row["is_public"]])
+            return 200, "application/json", _json.dumps({"items": rows}).encode()
         if path == "/api/account/recover" and self.command == "POST":
             data = data if isinstance(data, dict) else {}
             matches = [doc for doc in NOSQL_DOCS
@@ -750,6 +782,21 @@ class Handler(BaseHTTPRequestHandler):
                                     "username": doc["username"]}).encode()
                 return 200, "application/json", body
             return 400, "application/json", b'{"status":"invalid","error":"verification failed"}'
+        if path == "/api/jwt-cookie/me" and self.command == "GET":
+            payload = _unverified_jwt_payload(_cookie_value(
+                self.headers.get("Cookie"), "auth_token") or "")
+            if payload is None:
+                return 401, "application/json", b'{"error":"invalid token"}'
+            return 200, "application/json", _json.dumps(
+                {"id": payload.get("id"), "authenticated": True}).encode()
+        if path == "/api/jwt-cookie/admin" and self.command == "GET":
+            payload = _unverified_jwt_payload(_cookie_value(
+                self.headers.get("Cookie"), "auth_token") or "")
+            if payload is None:
+                return 401, "application/json", b'{"error":"invalid token"}'
+            if payload.get("id") != 1:
+                return 403, "application/json", b'{"error":"admin access required"}'
+            return 200, "application/json", b'{"message":"admin identity accepted"}'
         if path.startswith("/api/admin"):
             auth = self.headers.get("Authorization") or ""
             if not auth:
