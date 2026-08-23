@@ -40,6 +40,9 @@ Routes:
                               undocumented caption="{value}" field; resubmitting that
                               response-only field expands safe context variables and
                               a synthetic high-value flag variable
+  PATCH /api/sspp/*       -> nested JSON merge sink with process-wide paired status,
+                              spacing, OPTIONS, exposed-header, and immutable-prototype
+                              fixtures; constructor-only and cleanup-failure variants
   *    /api/cmdi/*        -> DiceForge-shaped command-injection fixtures covering JSON,
                               query, form, path, header, and raw multipart transports,
                               plus reflection-only, invalid, rate-limit, and gateway controls
@@ -235,6 +238,78 @@ TEMPLATE_FLAG = "bug" + "{example_template_variable_fixture}"
 CMDI_FLAG = "bug" + "{CmdiQuickRegression123}"
 CMDI_ID = "uid=1000(fixture) gid=1000(fixture) groups=1000(fixture)"
 CMDI_OOB_LOG = None
+
+# Server-side prototype-pollution fixture state. This deliberately models properties
+# inherited process-wide, while accepting a source only at profile.settings so a helper
+# that probes the top level alone cannot find it. Neutral values stay present in the
+# dictionary, mirroring Object.prototype: the gadget behavior turns off, but the property
+# itself is not deleted until the fixture process is reset.
+SSPP_LOCK = threading.Lock()
+SSPP_STATE = {
+    "status": 0,
+    "json spaces": "",
+    "head": False,
+    "exposedHeaders": None,
+}
+SSPP_EVENTS = []
+
+
+def _reset_sspp_state():
+    with SSPP_LOCK:
+        SSPP_STATE.clear()
+        SSPP_STATE.update({
+            "status": 0,
+            "json spaces": "",
+            "head": False,
+            "exposedHeaders": None,
+        })
+        SSPP_EVENTS.clear()
+
+
+def _sspp_inner(data, constructor_only=False):
+    if not isinstance(data, dict):
+        return None, None
+    profile = data.get("profile")
+    settings = profile.get("settings") if isinstance(profile, dict) else None
+    if not isinstance(settings, dict):
+        return None, None
+    if not constructor_only and isinstance(settings.get("__proto__"), dict):
+        return "__proto__", settings["__proto__"]
+    constructor = settings.get("constructor")
+    if isinstance(constructor, dict) and isinstance(constructor.get("prototype"), dict):
+        return "constructor.prototype", constructor["prototype"]
+    return None, None
+
+
+def _sspp_body(data, path):
+    constructor_only = path.endswith("/constructor")
+    form, inner = _sspp_inner(data, constructor_only=constructor_only)
+    if isinstance(inner, dict) and isinstance(inner.get("__proto__"), dict):
+        return 500, b'{"error":"Immutable prototype object"}', {}
+    if path.endswith("/cleanup-fail") and isinstance(inner, dict) and inner.get("status") == 0:
+        return 429, b'{"error":"neutralizer rate limited"}', {}
+    if form and isinstance(inner, dict):
+        with SSPP_LOCK:
+            for key in ("status", "json spaces", "head", "exposedHeaders"):
+                if key in inner:
+                    SSPP_STATE[key] = inner[key]
+                    SSPP_EVENTS.append((form, key, inner[key]))
+    profile = data.get("profile") if isinstance(data, dict) else None
+    settings = profile.get("settings") if isinstance(profile, dict) else None
+    if not isinstance(settings, dict) or not isinstance(settings.get("theme"), str):
+        return 400, b'{"error":"profile.settings.theme is required"}', {}
+    response = {"ok": True, "profile": {"settings": {"theme": settings["theme"]}}}
+    with SSPP_LOCK:
+        gap = SSPP_STATE.get("json spaces")
+        exposed = SSPP_STATE.get("exposedHeaders")
+    if gap == " ":
+        body = _json.dumps(response, indent=" ").encode()
+    else:
+        body = _json.dumps(response, separators=(",", ":")).encode()
+    headers = {}
+    if isinstance(exposed, list) and exposed:
+        headers["Access-Control-Expose-Headers"] = ",".join(map(str, exposed))
+    return 200, body, headers
 
 
 def _cmdi_posix_result(value):
@@ -643,6 +718,28 @@ class Handler(BaseHTTPRequestHandler):
                 "formula": data.get("formula"), "value": 100, "caption": caption,
             }).encode()
             return 200, "application/json", body
+        if path.startswith("/api/sspp/") and self.command == "PATCH":
+            with SSPP_LOCK:
+                inherited_status = SSPP_STATE.get("status")
+            if getattr(self, "_json_invalid", False):
+                status = inherited_status if isinstance(inherited_status, int) and \
+                    400 <= inherited_status < 600 else 400
+                body = _json.dumps({"statusCode": status, "error": "invalid JSON"}).encode()
+                return status, "application/json", body
+            if path.endswith("/invalid-baseline"):
+                return 400, "application/json", b'{"error":"invalid baseline"}'
+            if path.endswith("/rate"):
+                return 429, "application/json", b'{"error":"slow down"}'
+            if path.endswith("/gateway"):
+                return 502, "text/plain", b"bad gateway"
+            if path.endswith("/safe"):
+                profile = data.get("profile") if isinstance(data, dict) else None
+                settings = profile.get("settings") if isinstance(profile, dict) else None
+                if not isinstance(settings, dict) or not isinstance(settings.get("theme"), str):
+                    return 400, "application/json", b'{"error":"theme is required"}'
+                return 200, "application/json", b'{"ok":true}'
+            status, body, headers = _sspp_body(data, path)
+            return status, "application/json", body, headers
         if path == "/api/cmdi/json" and self.command == "POST":
             data = data if isinstance(data, dict) else {}
             if not isinstance(data.get("dice"), list) or not isinstance(data.get("rollOptions"), str):
@@ -844,6 +941,7 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0) or 0)
         data = None
         self._raw_body = b""
+        self._json_invalid = False
         if length:
             raw = self.rfile.read(length)
             self._raw_body = raw
@@ -853,6 +951,7 @@ class Handler(BaseHTTPRequestHandler):
                     data = _json.loads(raw)
                 except (ValueError, UnicodeDecodeError):
                     data = None
+                    self._json_invalid = True
             elif "application/x-www-form-urlencoded" in ctype:
                 try:
                     parsed = parse_qs(raw.decode(), keep_blank_values=True)
@@ -888,8 +987,16 @@ class Handler(BaseHTTPRequestHandler):
         header advertising the app's global cross-origin policy, deliberately with no
         route-specific Allow header — probe.py must label this 'CORS policy', not 'Allow'."""
         self.send_response(204)
-        if self.path.split("?", 1)[0] == "/api/account/recover":
+        path = self.path.split("?", 1)[0]
+        if path == "/api/account/recover":
             self.send_header("Allow", "POST")
+        elif path.startswith("/api/sspp/"):
+            with SSPP_LOCK:
+                head = bool(SSPP_STATE.get("head"))
+            methods = ["GET", "PATCH"]
+            if not head:
+                methods.append("HEAD")
+            self.send_header("Allow", ", ".join(methods))
         self.send_header("Access-Control-Allow-Methods", CORS_ALLOW_METHODS)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -902,6 +1009,7 @@ def start():
     """Bind an ephemeral port, serve in a background thread. Returns (server, base_url)."""
     import threading
     _reset_auth_state()
+    _reset_sspp_state()
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

@@ -43,8 +43,8 @@ The methodology is app-first: read the application, establish real baselines, te
 and anonymous behavior, and follow the strongest live signal before reaching for broad scanners.
 
 ```text
-SKILL.md           ~2.8k tokens: workflow and signal routing
-references/*.md    16 files: focused guidance loaded when needed
+SKILL.md           ~3.2k tokens: workflow and signal routing
+references/*.md    17 files: focused guidance loaded when needed
 scripts/           bounded helpers for repeatable recon and testing
 ```
 
@@ -65,6 +65,7 @@ sync.
 | `lfiquick.py` | Test bounded Linux and Windows traversal/LFI paths and bypass families |
 | `graphqlquick.py` | Map and probe high-value read-only GraphQL operations |
 | `templatequick.py` | Test controllable response-only template fields |
+| `ssppquick.py` | Confirm nested JSON merge sinks with paired, behavior-nullifying prototype-pollution oracles |
 | `ssrfget.py` | Turn stored-response SSRF into a repeatable read primitive |
 | `oob.py` | Start a local callback collector and optional public tunnel for admin-bot labs |
 | `forgeflare.py`, `ffproxy.py` | Maintain Forgeflare-style clearance and proxy other tools through it |

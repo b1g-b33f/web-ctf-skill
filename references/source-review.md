@@ -43,6 +43,11 @@ grep -rE '(exec|eval|system|popen|render_template_string|subprocess|child_proces
 ```
 `file.save` / `move_uploaded_file` with an unsanitized filename → write traversal (`traversal-upload.md`).
 
+For Node/JavaScript, also pair recursive merge/copy sites (`merge`, `defaultsDeep`, recursive
+assignment, nested settings/profile updates) with authorization or feature checks on properties
+that may be absent from normal objects. Route that two-sided signal to
+`server-side-prototype-pollution.md`; do not begin by polluting the authorization property.
+
 This is a **server-side** sink pass. For client-side DOM XSS, `jsmine.py` analyzes both shipped
 application JS and `jsharvest.py`'s reconstructed `recon/src/` tree; validate any reported
 source-to-sink candidate through `references/browser.md`.

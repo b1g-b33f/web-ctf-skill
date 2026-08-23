@@ -135,6 +135,21 @@ cat > "$WORKDIR/WORKLOG.md" << EOF
 
 ## Attack surface
 
+## Coverage ledger
+
+Statuses: untested / in-progress / inconclusive / exhausted-with-evidence / confirmed / not-applicable
+
+| Class / hypothesis | Status | Scope and evidence | Next test |
+|---|---|---|---|
+| Access control / IDOR / BFLA | untested | | |
+| Authentication / JWT | untested | | |
+| SQL / NoSQL / command injection | untested | | |
+| Mass assignment / type confusion / SSPP | untested | | |
+| Business logic / race | untested | | |
+| SSTI | untested | | |
+| Traversal / upload | untested | | |
+| SSRF / XSS / CORS | untested | | |
+
 ## Exploitation log
 
 ## Flag

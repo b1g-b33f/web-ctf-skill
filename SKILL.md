@@ -58,9 +58,21 @@ before high-value variables with `templatequick.py` (`references/ssti.md`).
 9. **Fuzz only after app-led probing and live signals are exhausted** → `references/web-recon.md`.
 10. **Run the loop gate** until the flag is recovered or every surface has evidence-backed status.
 
-Maintain `WORKLOG.md` throughout: target, identities, auth state, endpoints, live leads, and killed
-hypotheses with the evidence that killed them. Store sensitive state under `current/auth/` so a
-reprovision cannot silently reuse stale credentials.
+Maintain `WORKLOG.md` throughout: target, identities, auth state, endpoints, live leads, and a
+coverage ledger whose killed hypotheses include the evidence that killed them. The ledger statuses
+are `untested`, `in-progress`, `inconclusive`, `exhausted-with-evidence`, `confirmed`, and
+`not-applicable`.
+Exhaustion is scoped to a named hypothesis and tested surface, never inferred for an entire class
+from one payload family. Store sensitive state under `current/auth/` so a reprovision cannot
+silently reuse stale credentials.
+
+Within a live hypothesis, finish its bounded differential set or record the evidence that suspends
+it before trying unrelated payloads. Stronger app evidence can change classes immediately. When no
+signal distinguishes plausible classes, use this tie-breaker: access control across identities,
+tenants, and write verbs -> auth/JWT -> injection across path, query, and body fields -> mass
+assignment/type confusion/prototype pollution -> logic/race -> SSTI -> traversal/upload ->
+SSRF/XSS/CORS. A secret surviving configured wordlists exhausts only that token's weak-secret
+hypothesis, not JWT or authentication as a class.
 
 ## Signal → reference routing
 
@@ -83,6 +95,7 @@ objective impact.
 | `DOM XSS CANDIDATES` hit; `location`/`postMessage`/referrer/window-name data reaching a DOM sink; client-side execution, DOM/localStorage flag, URL-parsing quirk, or clean browser tier needed | `references/browser.md` |
 | Prices, quantities, vouchers, balances, or multi-step workflows | `references/logic-race.md` |
 | Any JSON body endpoint as a cheap independent check | `references/json-type-confusion.md` |
+| Node/JavaScript nested JSON merge plus an absent-own-property authorization or feature check | `references/server-side-prototype-pollution.md` |
 | Rotating server/status behavior, canary instructions, or bot scoring | `references/anti-bot.md` |
 | No payload ideas remain for a named, live hypothesis | `references/vault-index.md` |
 
@@ -90,8 +103,9 @@ After every attempt, scan all response headers and bodies for the expected flag 
 
 ## Loop gate (no flag yet)
 
-1. Update `WORKLOG.md` and print a surface / tested / result table.
-2. Pursue the strongest untested vector without waiting for user direction.
+1. Update `WORKLOG.md` and print the coverage ledger with hypothesis, scope, status, and evidence.
+2. Pursue the strongest untested vector without waiting for user direction; use the tie-break order
+   only when live signals are equal.
 3. Re-open `references/vault-index.md` only when that named vector has no remaining evidence-led
    tests, then route again.
 
@@ -110,6 +124,8 @@ Keep these result semantics:
   (`references/xss-ssrf.md`).
 - A JWT candidate is a bypass only when the original token genuinely denied the target and the
   candidate removes that denial; verify the objective route, not only `/me` or token introspection.
+- `exhausted-with-evidence` names the identity, tenant, verbs, fields, or bounded payload set that
+  was actually tested. Untested auth-gated positions and non-applicable tenant axes stay explicit.
 
 Do not stop at a progress summary. Stop when the flag is in hand or the status table shows every
 surface exhausted with valid evidence.
@@ -131,6 +147,7 @@ Python helpers as `python3 ~/.codex/skills/web-ctf/scripts/<name>.py`; for examp
 | File read/traversal | `lfiquick.py` | `references/traversal-upload.md` |
 | GraphQL reads | `graphqlquick.py` | `references/graphql.md` |
 | Response-only interpolation | `templatequick.py` | `references/ssti.md` |
+| Server-side prototype-pollution source | `ssppquick.py` | `references/server-side-prototype-pollution.md` |
 | Stored-response SSRF or external callback | `ssrfget.py`, `oob.py` | `references/xss-ssrf.md` |
 
 For every helper, preserve a known-valid baseline and mutate one location at a time. Treat

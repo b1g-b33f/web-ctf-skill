@@ -57,6 +57,10 @@ flaghook.py had no way to prove PostToolUse was actually invoking it, and
 ctf-init.sh's quickcheck job never reached /api/stocks/search because /api
 itself is the SPA fallback.
 
+SsppQuickTest verifies paired, behavior-nullifying server-side prototype-pollution
+oracles at the exact nested object level, constructor.prototype fallback, cleanup
+after budget exhaustion, and the cleanup-failure circuit breaker.
+
 Run directly: python3 tests/test_regression.py
 """
 import json
@@ -450,6 +454,9 @@ class RegressionTest(unittest.TestCase):
             self.assertEqual(len(instances), 2, instances)
             with open(os.path.join(workdir, "WORKLOG.md"), encoding="utf-8") as fh:
                 worklog = fh.read()
+            self.assertIn("## Coverage ledger", worklog)
+            self.assertIn("exhausted-with-evidence", worklog)
+            self.assertIn("| Mass assignment / type confusion / SSPP | untested |", worklog)
             self.assertIn("## Reprovisioned", worklog)
             self.assertIn("**Previous target:** " + targets[0], worklog)
             self.assertIn("**Current target:** " + targets[1], worklog)
@@ -457,6 +464,134 @@ class RegressionTest(unittest.TestCase):
             self.assertTrue(os.path.isfile(expected_hook))
             self.assertIn("Previous flag-hook sentinel was not observed", outputs[1])
             self.assertIn("Next-call sentinel check", outputs[1])
+
+
+class SsppQuickTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def setUp(self):
+        fixture_app._reset_sspp_state()
+        self.data = json.dumps({
+            "apiToken": "fixture-sensitive-value",
+            "profile": {"settings": {"theme": "dark"}},
+        })
+
+    def url(self, mode="nested"):
+        return self.base_url + "/api/sspp/" + mode
+
+    def run_sspp(self, out, *extra, mode="nested", max_probes="80"):
+        return run_full(
+            "ssppquick.py", "--url", self.url(mode), "--method", "PATCH",
+            "--data", self.data, "--delay", "0", "--out", out,
+            "--max-probes", max_probes, *extra)
+
+    def test_every_paired_oracle_confirms_at_exact_nested_level_and_reverts(self):
+        for oracle in ("status", "spacing", "options", "exposed-headers", "blitz"):
+            with self.subTest(oracle=oracle), tempfile.TemporaryDirectory() as tmp:
+                fixture_app._reset_sspp_state()
+                proc = self.run_sspp(
+                    tmp, "--oracle", oracle, "--path", "/profile/settings")
+                out = proc.stdout + proc.stderr
+                self.assertEqual(proc.returncode, 0, out)
+                self.assertIn("CONFIRMED SSPP source: oracle=%s" % oracle, out)
+                self.assertIn("path=/profile/settings", out)
+                with open(os.path.join(tmp, "summary.json"), encoding="utf-8") as fh:
+                    summary = json.load(fh)
+                self.assertEqual(summary["outcome"], "confirmed")
+                self.assertEqual(summary["confirmed"]["path"], "/profile/settings")
+                self.assertTrue(summary["cleanup_verified"])
+                with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                    records = [json.loads(line) for line in fh if line.strip()]
+                self.assertEqual(records[0]["request_body"]["apiToken"], "<redacted>")
+                with fixture_app.SSPP_LOCK:
+                    self.assertEqual(fixture_app.SSPP_STATE["status"], 0)
+                    self.assertEqual(fixture_app.SSPP_STATE["json spaces"], "")
+                    self.assertFalse(fixture_app.SSPP_STATE["head"])
+                    self.assertIsNone(fixture_app.SSPP_STATE["exposedHeaders"])
+
+    def test_default_sweep_finds_nested_sink_not_just_top_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_sspp(tmp)
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 0, out)
+            self.assertIn("object levels: /, /profile, /profile/settings", out)
+            self.assertIn("path=/profile/settings", out)
+            with fixture_app.SSPP_LOCK:
+                self.assertEqual(fixture_app.SSPP_STATE["status"], 0)
+
+    def test_top_level_only_probe_is_a_bounded_miss(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_sspp(tmp, "--path", "/")
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 2, out)
+            self.assertIn("no confirmed source", out)
+            self.assertNotIn("CONFIRMED SSPP", out)
+
+    def test_constructor_fallback_preserves_exact_nesting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_sspp(
+                tmp, "--form", "constructor", "--path", "/profile/settings",
+                mode="constructor")
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 0, out)
+            self.assertIn("form=constructor.prototype path=/profile/settings", out)
+            with fixture_app.SSPP_LOCK:
+                self.assertIn(("constructor.prototype", "status", 510),
+                              fixture_app.SSPP_EVENTS)
+                self.assertIn(("constructor.prototype", "status", 0),
+                              fixture_app.SSPP_EVENTS)
+
+    def test_budget_exhaustion_still_runs_neutralizer_and_recheck(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_sspp(
+                tmp, "--path", "/profile/settings", max_probes="3")
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 2, out)
+            self.assertIn("probe budget reached (3)", out)
+            self.assertIn("neutralize", out)
+            self.assertIn("recheck", out)
+            with fixture_app.SSPP_LOCK:
+                self.assertEqual(fixture_app.SSPP_STATE["status"], 0)
+
+    def test_failed_neutralizer_is_a_loud_circuit_breaker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_sspp(
+                tmp, "--path", "/profile/settings", mode="cleanup-fail")
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 3, out)
+            self.assertIn("CLEANUP UNVERIFIED", out)
+            self.assertIn("stop and restart the lab", out)
+            with open(os.path.join(tmp, "summary.json"), encoding="utf-8") as fh:
+                summary = json.load(fh)
+            self.assertFalse(summary["cleanup_verified"])
+            with fixture_app.SSPP_LOCK:
+                self.assertEqual(fixture_app.SSPP_STATE["status"], 510)
+
+    def test_invalid_baseline_stops_before_any_pollution_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_sspp(tmp, mode="invalid-baseline")
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 2, out)
+            self.assertIn("known-valid baseline did not succeed", out)
+            with fixture_app.SSPP_LOCK:
+                self.assertEqual(fixture_app.SSPP_EVENTS, [])
+
+    def test_rate_limit_and_gateway_are_circuit_breakers(self):
+        for mode, status in (("rate", "429"), ("gateway", "502")):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                fixture_app._reset_sspp_state()
+                proc = self.run_sspp(tmp, mode=mode)
+                out = proc.stdout + proc.stderr
+                self.assertEqual(proc.returncode, 3, out)
+                self.assertIn(status, out)
+                with fixture_app.SSPP_LOCK:
+                    self.assertEqual(fixture_app.SSPP_EVENTS, [])
 
 
 class JwtquickWordlistChainTest(unittest.TestCase):

