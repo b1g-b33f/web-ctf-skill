@@ -61,6 +61,10 @@ SsppQuickTest verifies paired, behavior-nullifying server-side prototype-polluti
 oracles at the exact nested object level, constructor.prototype fallback, cleanup
 after budget exhaustion, and the cleanup-failure circuit breaker.
 
+MassAssignQuickTest preserves the WordMess failure as a regression: rejected generic
+administrator shapes do not suppress named nested capabilities, unchanged role labels
+do not override stored/menu/route evidence, and newly exposed forms remain in the chain.
+
 Run directly: python3 tests/test_regression.py
 """
 import json
@@ -214,6 +218,9 @@ class RegressionTest(unittest.TestCase):
                 methods = fh.read()
             self.assertRegex(methods, r'POST\s+/api/auth/login',
                              "server-rendered form action was not mined:\n" + out)
+            with open(os.path.join(tmp, "form-schemas.txt"), encoding="utf-8") as fh:
+                schemas = fh.read()
+            self.assertIn("POST   /api/auth/login encoding=form fields=email", schemas)
 
     def test_jsharvest_quarantines_dynamic_links_without_requesting_them(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -314,6 +321,11 @@ class RegressionTest(unittest.TestCase):
             with open(os.path.join(workdir, "recon", "methods.txt"), encoding="utf-8") as fh:
                 methods = fh.read()
             self.assertRegex(methods, r'POST\s+/api/auth/login', out)
+            with open(os.path.join(workdir, "recon", "form-schemas.txt"),
+                      encoding="utf-8") as fh:
+                schemas = fh.read()
+            self.assertIn("POST   /api/auth/login encoding=form fields=email", schemas)
+            self.assertIn("Rendered form schemas", out)
             graphql_endpoints = os.path.join(workdir, "recon", "graphql-endpoints.txt")
             with open(graphql_endpoints, encoding="utf-8") as fh:
                 self.assertEqual(fh.read().strip(), "/api/graphql")
@@ -592,6 +604,183 @@ class SsppQuickTest(unittest.TestCase):
                 self.assertIn(status, out)
                 with fixture_app.SSPP_LOCK:
                     self.assertEqual(fixture_app.SSPP_EVENTS, [])
+
+
+class MassAssignQuickTest(unittest.TestCase):
+    """WordMess regression: rejected administrator shapes do not exhaust nested
+    capabilities, and an unchanged subscriber role does not erase stored/menu/route
+    evidence. The next exposed form is then followed to the registration-role step."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.base_url = fixture_app.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def setUp(self):
+        fixture_app._reset_mass_state()
+
+    def run_mass(self, out, *extra, endpoint="profile.php"):
+        return run_full(
+            "massassignquick.py",
+            "--url", self.base_url + "/wp-admin/" + endpoint,
+            "--method", "POST", "--encoding", "form",
+            "--baseline", "_wpnonce=valid&display_name=student&email=s%40example.test",
+            "--path", "meta[wm_capabilities]",
+            "--readback", self.base_url + "/wp-json/wp/v2/users/me?context=edit",
+            "--surface", self.base_url + "/wp-admin/",
+            "--oracle", self.base_url + "/wp-admin/options-discussion.php",
+            "--delay", "0", "--out", out, *extra)
+
+    def test_rejected_admin_shape_does_not_hide_effective_named_capabilities(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_mass(
+                tmp, "--candidate", "administrator",
+                "--candidate", "moderate_comments", "--candidate", "list_users",
+                "--cleanup-value", "false")
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 0, out)
+            self.assertIn("no stored or effective differential for administrator", out)
+            self.assertIn("STORED nested candidate moderate_comments", out)
+            self.assertIn("EFFECTIVE privilege transition for moderate_comments", out)
+            self.assertIn("field=options[default_role]", out)
+            self.assertIn("EFFECTIVE privilege transition for list_users", out)
+            with open(os.path.join(tmp, "summary.json"), encoding="utf-8") as fh:
+                summary = json.load(fh)
+            self.assertEqual(summary["outcome"], "confirmed")
+            self.assertEqual({item["candidate"] for item in summary["effective"]},
+                             {"moderate_comments", "list_users"})
+            self.assertTrue(summary["cleanup_verified"])
+            with open(os.path.join(tmp, "probes.jsonl"), encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            readbacks = [json.loads(item["body"]) for item in records
+                         if item["label"].endswith("readback")]
+            self.assertTrue(all(item["roles"] == ["subscriber"] for item in readbacks))
+            nonce_values = [value for item in records
+                            for key, value in (item.get("request_body") or [])
+                            if key == "_wpnonce"]
+            self.assertTrue(nonce_values)
+            self.assertEqual(set(nonce_values), {"<redacted>"})
+            with fixture_app.MASS_LOCK:
+                self.assertFalse(fixture_app.MASS_STATE["capabilities"]["moderate_comments"])
+                self.assertFalse(fixture_app.MASS_STATE["capabilities"]["list_users"])
+
+    def test_stored_only_candidate_remains_a_lead_not_a_confirmed_escalation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_mass(
+                tmp, "--candidate", "manage_options", "--cleanup-value", "false")
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 2, out)
+            self.assertIn("STORED nested candidate manage_options", out)
+            self.assertIn("stored-only lead", out)
+            self.assertIn("no effective privilege transition", out)
+
+    def test_wordpress_profile_is_opt_in_and_bounded_to_named_capabilities(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_mass(
+                tmp, "--profile", "wordpress-capabilities", "--cleanup-value", "false")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            with open(os.path.join(tmp, "summary.json"), encoding="utf-8") as fh:
+                summary = json.load(fh)
+            self.assertEqual(summary["candidates"], [
+                "moderate_comments", "list_users", "manage_options", "activate_plugins",
+                "install_plugins", "edit_themes", "edit_users", "promote_users",
+            ])
+            self.assertLessEqual(summary["probes"], summary["max_probes"])
+
+    def test_invalid_baseline_stops_before_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "massassignquick.py",
+                "--url", self.base_url + "/wp-admin/profile.php",
+                "--baseline", "_wpnonce=wrong&display_name=student",
+                "--path", "meta[wm_capabilities]", "--candidate", "moderate_comments",
+                "--cleanup-value", "false",
+                "--readback", self.base_url + "/wp-json/wp/v2/users/me?context=edit",
+                "--out", tmp, "--delay", "0")
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 2, out)
+            self.assertIn("known-valid baseline did not succeed", out)
+            with fixture_app.MASS_LOCK:
+                self.assertEqual(fixture_app.MASS_STATE["capabilities"], {})
+
+    def test_rate_gateway_and_cleanup_failure_are_circuit_breakers(self):
+        for endpoint in ("profile-rate.php", "profile-gateway.php",
+                         "profile-cleanup-fail.php"):
+            with self.subTest(endpoint=endpoint), tempfile.TemporaryDirectory() as tmp:
+                fixture_app._reset_mass_state()
+                proc = self.run_mass(
+                    tmp, "--candidate", "moderate_comments", "--cleanup-value", "false",
+                    endpoint=endpoint)
+                out = proc.stdout + proc.stderr
+                self.assertEqual(proc.returncode, 3, out)
+                self.assertIn("CLEANUP UNVERIFIED", out)
+                with open(os.path.join(tmp, "summary.json"), encoding="utf-8") as fh:
+                    summary = json.load(fh)
+                self.assertEqual(summary["outcome"], "circuit-breaker")
+                self.assertFalse(summary["cleanup_verified"])
+
+    def test_exposed_discussion_form_completes_default_role_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_mass(
+                tmp, "--candidate", "moderate_comments", "--disposable")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            options = requests.post(
+                self.base_url + "/wp-admin/options-discussion.php",
+                data={"_wpnonce": "valid", "options[default_role]": "administrator"},
+                timeout=5)
+            self.assertEqual(options.status_code, 200, options.text)
+            created = requests.post(
+                self.base_url + "/wp-admin/register.php",
+                data={"username": "next-user"}, timeout=5)
+            self.assertEqual(created.status_code, 201, created.text)
+            self.assertEqual(created.json()["role"], "administrator")
+
+    def test_json_pointer_transport_has_the_same_state_transition_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "massassignquick.py",
+                "--url", self.base_url + "/api/mass/profile",
+                "--encoding", "json", "--method", "POST",
+                "--baseline", '{"displayName":"student"}',
+                "--path", "/meta/wm_capabilities",
+                "--candidate", "moderate_comments", "--cleanup-value", "false",
+                "--readback", self.base_url + "/api/mass/me",
+                "--surface", self.base_url + "/wp-admin/",
+                "--oracle", self.base_url + "/wp-admin/options-discussion.php",
+                "--delay", "0", "--out", tmp)
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 0, out)
+            self.assertIn("STORED nested candidate moderate_comments", out)
+            self.assertIn("EFFECTIVE privilege transition for moderate_comments", out)
+
+
+class JsmineFormSchemaTest(unittest.TestCase):
+    def test_full_nested_form_schema_is_retained_without_cmdi_shaped_fields(self):
+        markup = r'''<form action="/wp-admin/profile.php" method="post">
+<input type="hidden" name="_wpnonce" value="fixture">
+<input name="display_name"><textarea name="meta[wm_bio]"></textarea>
+<input name="meta[wm_social][website]"></form>
+<form><select name="options[default_role]"></select></form>'''
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "profile.html")
+            with open(source, "w", encoding="utf-8") as fh:
+                fh.write(markup)
+            proc = run_full("jsmine.py", source)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            section = re.search(
+                r'=== FORM SCHEMAS \(candidate fields, not findings\).*?(?=\n===|\Z)',
+                proc.stdout, re.S)
+            self.assertIsNotNone(section, proc.stdout)
+            body = section.group(0)
+            self.assertIn("POST   /wp-admin/profile.php encoding=form", body)
+            self.assertIn("_wpnonce,display_name,meta[wm_bio],meta[wm_social][website]", body)
+            self.assertIn("roots=meta", body)
+            self.assertIn("GET    <current> encoding=form fields=options[default_role] roots=options",
+                          body)
+            self.assertIn("source=profile.html", body)
 
 
 class JwtquickWordlistChainTest(unittest.TestCase):

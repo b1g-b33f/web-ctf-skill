@@ -29,6 +29,7 @@ against it — see §2. Produces in `recon/`:
 | `<bundle>.js`/`.mjs`, `<bundle>.map`, `vendor/` | `jsharvest.py` | application bundles/maps; known vendor/runtime bundles are retained under `vendor/` and excluded from mining |
 | `jsmine.txt` | `jsharvest.py` → `jsmine.py` | the full mined-routes report over everything downloaded |
 | `methods.txt` | `jsharvest.py` | just the `METHOD -> PATH` lines, ready to pipe into `probe.py` |
+| `form-schemas.txt` | `jsharvest.py` | rendered form methods/actions, encodings, every named field, and nested bracket roots; candidates, not findings |
 | `dynamic-links.txt`, `source-provenance.tsv` | `jsharvest.py` | literal JS/template hrefs that were not requested, plus app/vendor source classification |
 | `fallback.txt`, `fallback_post.txt` | `quickrecon.py` | per-method calibration responses used by the meta/quickcheck jobs |
 | `meta_hits.txt`, `quickcheck_hits.txt` | `quickrecon.py` | real hits only, as `status size content-type URL`, including direct protected API-leaf guesses whose 401/403 existence oracle cannot be reached by recursive fuzzing; SPA fallback and framework-404s already suppressed |
@@ -48,8 +49,8 @@ If the script reports a flag match already, record it and stop.
 `ctf-init.sh` already ran this once, pre-login, via `jsharvest.py`: it pulls every `<script src>`
 off the root page (resolving absolute, protocol-relative, root-relative and ordinary relative URLs
 the same way), downloads `.js`/`.mjs` bundles plus any non-inline `sourceMappingURL` they advertise,
-mines the lot, and writes `recon/jsmine.txt` + `recon/methods.txt`. Check those two files before
-hand-mining anything.
+mines the lot, and writes `recon/jsmine.txt`, `recon/methods.txt`, and
+`recon/form-schemas.txt`. Check all three before hand-mining anything.
 
 **Re-run it authenticated.** Some apps ship different bootstrap data once you're logged in — that's
 the one thing the automatic pre-auth pass can't see:
@@ -63,8 +64,9 @@ This safely GET-crawls same-origin HTML pages from the dashboard, mines rendered
 as well as bundles, rejects non-2xx/error-page assets, and quarantines literal template/JS hrefs
 such as `/jobs/${job.id}` in `dynamic-links.txt` instead of requesting them. Known vendor bundles
 and package-namespace source maps (including Socket.IO maps without a `node_modules/` segment)
-remain available as raw evidence under `vendor/` but are excluded from application mining. It overwrites
-`jsmine.txt`/`methods.txt` with the union — nothing from the first pass is lost.
+remain available as raw evidence under `vendor/` but are excluded from application mining. It
+overwrites `jsmine.txt`/`methods.txt`/`form-schemas.txt` with the union — nothing from the first
+pass is lost.
 
 `jsmine.py` recognizes native `fetch(url, {method: ...})` and request helpers whose definitions
 delegate to `fetch`/Axios, including qualified calls such as `FurHire.apiRequest(...)`. Its plain
@@ -73,6 +75,12 @@ show where each method came from and rank recovery/reset/verify/search-style sur
 exist but zero methods map, both harvest tools raise a high-priority warning and `ctf-init.sh`
 runs action-shaped GET misses through route-specific `Allow` plus a calibrated `POST {}` fallback.
 Never interpret that invariant as “GET only.”
+
+`FORM SCHEMAS` retains every rendered input/select/textarea/button name, encoding, action, and
+bracket root, including fields that match no injection keyword. Re-check it after login and after
+any capability change. A newly visible form is a discovery fixpoint, and roots such as `meta[...]`
+or `options[...]` are leads for bounded hidden-sibling testing (`access-control.md`); they are not
+vulnerability findings by themselves.
 
 **A component can "exist in the browser" and not exist on the server.** DevTools' Sources
 panel reconstructs a full original-file tree (`components/AdminPanel.js`, `Dashboard.js`, ...)

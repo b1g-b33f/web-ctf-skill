@@ -35,8 +35,8 @@ before high-value variables with `templatequick.py` (`references/ssti.md`).
 1. **Review supplied source** → `references/source-review.md`.
 2. **Initialize retained recon** with `ctf-init.sh` → `references/web-recon.md`. Let the execution
    session yield while the script runs; do not detach it. Check `recon/methods.txt`,
-   `recon/cmdi-signals.txt`, and `recon/lfi-signals.txt` before hand-mining. Signal files contain
-   candidates, not findings.
+   `recon/form-schemas.txt`, `recon/cmdi-signals.txt`, and `recon/lfi-signals.txt` before
+   hand-mining. Signal files and form fields contain candidates, not findings.
 3. **Identify the app once** if a notes vault exists. Search filenames by the shortest distinctive
    stem. One exact challenge note is a method lead; several family notes transfer only endpoint and
    hardened-surface clues. Open a family note only after a matching live signal fires
@@ -141,6 +141,7 @@ Python helpers as `python3 ~/.codex/skills/web-ctf/scripts/<name>.py`; for examp
 |---|---|---|
 | Initialize/recon and mine JS | `ctf-init.sh`, `jsharvest.py`, `jsmine.py` | `references/web-recon.md` |
 | Compare anonymous/auth/low-priv routes | `probe.py` | `references/access-control.md`, `references/web-recon.md` |
+| Hidden/nested mass assignment | `massassignquick.py` | `references/access-control.md` |
 | First-use auth or JWT fast track | `authquick.py`, `jwtquick.py` | `references/auth-jwt.md` |
 | SQL/NoSQL differential | `sqlquick.py`, `nosqlquick.py` | `references/injection.md` |
 | Command execution | `cmdiquick.py` | `references/command-injection.md` |
@@ -154,6 +155,10 @@ For every helper, preserve a known-valid baseline and mutate one location at a t
 `UNTESTED`, rate limits, gateway errors, and invalid baselines as inconclusive. `probe.py` findings
 matter when calibrated behavior changes across identities; always supply method-qualified routes,
 and use `--write` for privileged action prefixes.
+
+For profile/settings endpoints, an unchanged role label or a rejected administrator-shaped field
+does not exhaust mass assignment. Re-fetch an authoritative edit-context representation, compare
+menus/forms and denied routes after each nested property, then harvest every newly exposed form.
 
 `flaghook.py` is only a safety net. Its project-scoped configuration lives at
 `~/Offsec/Web_CTF/.codex/config.toml`; verify hook activation after an app restart as documented in

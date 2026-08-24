@@ -14,7 +14,7 @@ curl -si "<target>/api/<endpoint>/$((YOUR_ID + 1))" $AUTH_HEADER
 
 **Check what the id space actually is before concluding.** If `/api/resource/4` says "not found" for your *own* id, the route is probably keyed by something else — username, slug, share token. Test with your own known identifier of each type before declaring no IDOR.
 
-## B. Mass assignment — `role` / `isAdmin` / `permissions` / `tier` / `plan`
+## B. Mass assignment — direct roles and nested capability maps
 
 ```bash
 # profile update
@@ -35,6 +35,51 @@ After each attempt, **re-fetch your profile and re-probe the gated route**. A `2
 accepted; serializers commonly accept and ignore unknown/protected fields. The privilege is
 confirmed only when stored state changes or the previously denied capability opens. Prefer a
 safe no-op action on the gated route when verification would otherwise mutate shared state.
+
+Do not stop after the familiar scalar fields. A form or JSON endpoint can accept hidden nested
+members even when the response schema and visible inputs do not advertise them. Harvest the full
+authenticated form schema with `jsmine.py`; `FORM SCHEMAS` retains every input/select/textarea
+name and bracket root. Visible names such as `meta[wm_bio]`, `options[email_notify]`, or a JSON
+`meta` object are parser-shape evidence for hidden siblings, not proof that the siblings are safe.
+
+Test one explicit child at a time at the exact observed nesting. For a WordPress-like clone, use
+the bounded profile only after a capability-map signal exists:
+
+```bash
+python3 ~/.codex/skills/web-ctf/scripts/massassignquick.py \
+  --url <target>/wp-admin/profile.php --method POST --encoding form \
+  --baseline-file current/auth/profile-form.txt --path 'meta[wm_capabilities]' \
+  --profile wordpress-capabilities --cleanup-value false \
+  --readback '<target>/wp-json/wp/v2/users/me?context=edit' \
+  --surface <target>/wp-admin/ \
+  --oracle <target>/wp-admin/options-discussion.php \
+  --cookie "$COOKIE" --out recon/massassignquick
+```
+
+The default `/me` representation may omit private meta. Prefer an edit/admin context when the
+application supports one, and preserve the ordinary response as a control. Read the helper's
+results in three levels:
+
+- update response only: accepted request, not evidence;
+- candidate appears in authoritative readback: **stored-only lead**;
+- new menu/link/form or a denied route opens: **effective capability transition**.
+
+An unchanged `role: subscriber` does not negate a stored capability map or a newly opened route.
+Likewise, rejection of `role=administrator`, `capabilities=administrator`, or an
+`administrator=true` child exhausts only those exact shapes. It says nothing about named
+capabilities such as moderation, user-listing, settings, plugin, or theme actions. CVE parameter
+lists are candidate sources for a clone, never an exact-match gate: a parameter need not be
+rendered or documented to be accepted.
+
+Treat every newly exposed page as a discovery fixpoint: harvest its full form again, submit only
+one new setting with a valid baseline, and verify downstream state. For example, if a capability
+opens a Discussion form containing `options[default_role]`, changing that setting is not yet
+privilege escalation; register a fresh account and confirm its effective role. Continue until no
+new links, forms, methods, or authorization transitions appear.
+
+Cleanup is mandatory for multi-candidate runs. Use a verified neutral value such as `false`, or
+use `--disposable` with exactly one candidate on an account/lab that can be discarded. A failed
+cleanup, 429, gateway error, or invalid baseline is a circuit breaker, not a negative result.
 
 ## C. BFLA — the guard that was never mounted on one verb
 

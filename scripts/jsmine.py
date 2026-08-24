@@ -735,6 +735,33 @@ def extract_method_lines(js, wrapper_names):
             + generic_request_lines(js, wrapper_names) + extract_dom_resource_lines(js))
 
 
+def extract_form_schemas(js):
+    """Retain every rendered form field, including nested bracket notation.
+
+    These are schema leads, not vulnerability claims. Full names matter because
+    a harmless visible ``meta[...]`` or ``options[...]`` field can identify the
+    parser/root used by an accepted hidden sibling.
+    """
+    schemas = []
+    for form in re.findall(r'<form\b[^>]*>.*?</form\s*>', js, re.I | re.S):
+        open_tag = form[:form.find(">") + 1]
+        attrs = dict((key.lower(), value) for key, _, value in re.findall(
+            r'([:\w-]+)\s*=\s*(["\'])(.*?)\2', open_tag, re.I | re.S))
+        action = attrs.get("action", "") or "<current>"
+        method = attrs.get("method", "GET").upper()
+        enctype = attrs.get("enctype", "application/x-www-form-urlencoded").lower()
+        encoding = "multipart" if "multipart/form-data" in enctype else "form"
+        fields = list(dict.fromkeys(re.findall(
+            r'<(?:input|select|textarea|button)\b[^>]*\bname\s*=\s*["\']([^"\']+)',
+            form, re.I | re.S)))
+        roots = list(dict.fromkeys(match.group(1) for field in fields
+                                  for match in [re.match(r'^([^\[]+)\[', field)] if match))
+        schemas.append("%-6s %s encoding=%s fields=%s roots=%s" % (
+            method, action, encoding, ",".join(fields) or "<none>",
+            ",".join(roots) or "<none>"))
+    return schemas
+
+
 # The name is optional: `query { ... }` is a valid anonymous operation and is
 # common in hand-written clients. The name must still be whitespace-separated
 # from the keyword, or minified `document.querySelector(...)` splits into the
@@ -990,6 +1017,13 @@ def main():
     provenance_lines = ["%s [%s; high]" % (line, ", ".join(sorted(paths)))
                         for line, paths in provenance.items()]
     section("METHOD PROVENANCE", provenance_lines)
+
+    form_schemas = []
+    for filename, blob in blobs:
+        label = source_label(filename).replace("\\", "/")
+        form_schemas.extend("%s [source=%s]" % (schema, label)
+                            for schema in extract_form_schemas(blob))
+    section("FORM SCHEMAS (candidate fields, not findings)", form_schemas, width=800)
 
     cmdi_signals = []
     for filename, blob in blobs:

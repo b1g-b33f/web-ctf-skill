@@ -211,9 +211,10 @@ if ! python3 "$SCRIPT_DIR/jsharvest.py" --base "$TARGET" --out "$RECON" \
   tail -5 "$RECON/jsharvest.log" 2>/dev/null
 fi
 METHOD_COUNT=$(line_count "$RECON/methods.txt")
+FORM_COUNT=$(line_count "$RECON/form-schemas.txt")
 ROUTE_COUNT=$(sed -n 's/^=== ROUTES (\([0-9][0-9]*\)) ===$/\1/p' "$RECON/jsmine.txt" 2>/dev/null | head -1)
 ROUTE_COUNT="${ROUTE_COUNT:-0}"
-echo "[*] JS harvest done — $METHOD_COUNT METHOD -> PATH entries ($RECON/methods.txt, $RECON/jsmine.txt)"
+echo "[*] JS harvest done — $METHOD_COUNT methods, $FORM_COUNT form schemas ($RECON/methods.txt, $RECON/form-schemas.txt, $RECON/jsmine.txt)"
 awk '
   /^=== COMMAND-INJECTION FIELD SIGNALS / { inside=1; next }
   /^=== / { inside=0 }
@@ -367,6 +368,13 @@ cat "$RECON/headers.txt" 2>/dev/null | grep -E "^(HTTP|Server|X-Powered|Set-Cook
 echo ""
 echo "── JS harvest — METHOD -> PATH (recon/methods.txt) ─────"
 cat "$RECON/methods.txt" 2>/dev/null || echo "  none"
+
+if [[ -s "$RECON/form-schemas.txt" ]]; then
+  echo ""
+  echo "── Rendered form schemas (recon/form-schemas.txt) ────────────"
+  cat "$RECON/form-schemas.txt"
+  echo "  Candidate fields, not findings: re-harvest after auth and every capability change."
+fi
 
 if [[ -s "$RECON/cmdi-signals.txt" ]]; then
   echo ""

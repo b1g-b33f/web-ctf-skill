@@ -7,6 +7,7 @@ pulls every <script src=...> off them. It resolves each one
 urljoin), downloads only successful non-HTML bundles plus their source maps (skipped when the
 sourceMappingURL is an inline data: URI), then runs jsmine.py over everything that
 landed on disk and writes recon/jsmine.txt + a probe-ready recon/methods.txt.
+The full rendered field names are also split into recon/form-schemas.txt.
 
 Every downloaded map also gets exploded: sourcesContent (the original, unminified
 per-file source webpack/CRA embeds) is written out to recon/src/<original/path>.js,
@@ -24,7 +25,7 @@ Usage:
 
 Run it again after login with --token/--cookie: some apps ship different bootstrap
 data once authenticated, and re-running re-mines the full accumulated bundle set
-(old assets + any new ones), overwriting jsmine.txt/methods.txt with the union.
+(old assets + any new ones), overwriting jsmine.txt/methods.txt/form-schemas.txt with the union.
 For cookie-authenticated server-rendered apps, pass --cookie-file <curl-jar>,
 --page /dashboard, and --crawl-pages so form actions are harvested even if JS assets 404.
 """
@@ -405,6 +406,13 @@ def main():
     for entry in methods:
         print("    " + entry)
 
+    form_schemas = extract_section(jsmine_out, "FORM SCHEMAS (candidate fields, not findings)")
+    form_schema_path = os.path.join(a.out, "form-schemas.txt")
+    with open(form_schema_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(form_schemas) + ("\n" if form_schemas else ""))
+    print("[*] %d rendered form schema(s) saved to %s" %
+          (len(form_schemas), form_schema_path))
+
     route_match = re.search(r'^=== ROUTES \((\d+)\) ===$', jsmine_out, re.M)
     route_count = int(route_match.group(1)) if route_match else 0
     if route_count and not methods:
@@ -421,6 +429,24 @@ def extract_methods(jsmine_out):
     out, in_section = [], False
     for line in lines:
         if re.match(r'^=== METHOD -> PATH \(\d+\) ===\s*$', line):
+            in_section = True
+            continue
+        if in_section:
+            if line.startswith("==="):
+                break
+            stripped = line.strip()
+            if stripped:
+                out.append(stripped)
+    return out
+
+
+def extract_section(jsmine_out, title):
+    """Return displayed lines from one exact jsmine section."""
+    lines = jsmine_out.splitlines()
+    out, in_section = [], False
+    heading = re.compile(r'^=== %s \(\d+\) ===\s*$' % re.escape(title))
+    for line in lines:
+        if heading.match(line):
             in_section = True
             continue
         if in_section:

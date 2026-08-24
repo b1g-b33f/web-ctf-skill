@@ -57,7 +57,7 @@ sync.
 | Tool | What it does |
 |---|---|
 | `ctf-init.sh` | Creates or resumes a challenge workspace and launches the initial recon jobs |
-| `jsharvest.py`, `jsmine.py` | Harvest application JavaScript/source maps; mine routes, methods, fields, GraphQL operations, and DOM/realtime-XSS candidates |
+| `jsharvest.py`, `jsmine.py` | Harvest application JavaScript/source maps; mine routes, methods, full form schemas, GraphQL operations, and DOM/realtime-XSS candidates |
 | `quickrecon.py`, `probe.py` | Check routes with calibrated fallback detection and authenticated/anonymous comparisons |
 | `authquick.py`, `jwtquick.py` | Test first-use account flows and the bounded JWT attack surface over Bearer or cookie transport |
 | `sqlquick.py`, `nosqlquick.py` | Run guarded SQL and document-query injection fast tracks |
@@ -65,6 +65,7 @@ sync.
 | `lfiquick.py` | Test bounded Linux and Windows traversal/LFI paths and bypass families |
 | `graphqlquick.py` | Map and probe high-value read-only GraphQL operations |
 | `templatequick.py` | Test controllable response-only template fields |
+| `massassignquick.py` | Test explicit hidden/nested properties against stored-state, menu/form, and gated-route oracles |
 | `ssppquick.py` | Confirm nested JSON merge sinks with paired, behavior-nullifying prototype-pollution oracles |
 | `ssrfget.py` | Turn stored-response SSRF into a repeatable read primitive |
 | `oob.py` | Start a local callback collector and optional public tunnel for admin-bot labs |
@@ -89,6 +90,12 @@ python3 ~/.codex/skills/web-ctf/scripts/jwtquick.py \
 python3 ~/.codex/skills/web-ctf/scripts/lfiquick.py \
   --url "<target>/api/image?file=/uploads/known.png" --param file \
   --token "$TOKEN" --out recon/lfiquick
+
+# test a signaled nested capability map one property at a time
+python3 ~/.codex/skills/web-ctf/scripts/massassignquick.py \
+  --url <target>/profile --baseline-file current/auth/profile-form.txt \
+  --path 'meta[capabilities]' --candidate moderate_comments --cleanup-value false \
+  --readback '<target>/api/me?context=edit' --surface <target>/admin
 
 # start the callback collector before testing an admin bot
 python3 ~/.codex/skills/web-ctf/scripts/oob.py --name <challenge>

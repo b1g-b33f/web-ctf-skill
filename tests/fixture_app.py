@@ -43,6 +43,9 @@ Routes:
   PATCH /api/sspp/*       -> nested JSON merge sink with process-wide paired status,
                               spacing, OPTIONS, exposed-header, and immutable-prototype
                               fixtures; constructor-only and cleanup-failure variants
+  *    /wp-*              -> WordMess-shaped nested capability mass assignment: role
+                              stays subscriber while independently stored capabilities
+                              expose admin menus/forms and a default-registration-role step
   *    /api/cmdi/*        -> DiceForge-shaped command-injection fixtures covering JSON,
                               query, form, path, header, and raw multipart transports,
                               plus reflection-only, invalid, rate-limit, and gateway controls
@@ -266,6 +269,56 @@ def _reset_sspp_state():
         SSPP_EVENTS.clear()
 
 
+# WordMess-shaped form mass assignment. Top-level/scalar administrator guesses are
+# ignored, but named boolean capabilities nested below meta[wm_capabilities] persist.
+# This specifically guards against treating an unchanged role label as a negative.
+MASS_LOCK = threading.Lock()
+MASS_STATE = {
+    "capabilities": {},
+    "default_role": "subscriber",
+    "last_user": None,
+}
+
+
+def _reset_mass_state():
+    with MASS_LOCK:
+        MASS_STATE.clear()
+        MASS_STATE.update({
+            "capabilities": {},
+            "default_role": "subscriber",
+            "last_user": None,
+        })
+
+
+def _mass_bool(value):
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _mass_profile_update(data, path):
+    data = data if isinstance(data, dict) else {}
+    if data.get("_wpnonce") != "valid" or "display_name" not in data:
+        return 403, "application/json", b'{"error":"invalid profile baseline"}'
+    capability_keys = [key for key in data
+                       if key.startswith("meta[wm_capabilities][") and key.endswith("]")]
+    if capability_keys and path.endswith("profile-rate.php"):
+        return 429, "application/json", b'{"error":"slow down"}'
+    if capability_keys and path.endswith("profile-gateway.php"):
+        return 502, "text/plain", b"bad gateway"
+    allowed = {
+        "moderate_comments", "list_users", "manage_options", "activate_plugins",
+        "install_plugins", "edit_themes", "edit_users", "promote_users",
+    }
+    with MASS_LOCK:
+        for key in capability_keys:
+            name = key[len("meta[wm_capabilities]["):-1]
+            value = _mass_bool(data[key])
+            if path.endswith("profile-cleanup-fail.php") and not value:
+                return 429, "application/json", b'{"error":"cleanup rate limited"}'
+            if name in allowed:
+                MASS_STATE["capabilities"][name] = value
+    return 200, "application/json", b'{"updated":true,"role":"subscriber"}'
+
+
 def _sspp_inner(data, constructor_only=False):
     if not isinstance(data, dict):
         return None, None
@@ -487,6 +540,91 @@ class Handler(BaseHTTPRequestHandler):
     def _route(self, data=None):
         path = self.path.split("?", 1)[0]
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+        if path in (
+                "/wp-admin/profile.php", "/wp-admin/profile-rate.php",
+                "/wp-admin/profile-gateway.php", "/wp-admin/profile-cleanup-fail.php"):
+            if self.command == "POST":
+                return _mass_profile_update(data, path)
+            return 200, "text/html", (
+                b'<form action="/wp-admin/profile.php" method="post">'
+                b'<input type="hidden" name="_wpnonce" value="valid">'
+                b'<input name="display_name"><input name="email">'
+                b'<textarea name="meta[wm_bio]"></textarea>'
+                b'<input name="meta[wm_social][website]"></form>')
+        if path == "/api/mass/profile" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            if "displayName" not in data:
+                return 400, "application/json", b'{"error":"displayName required"}'
+            meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+            caps = (meta.get("wm_capabilities")
+                    if isinstance(meta.get("wm_capabilities"), dict) else {})
+            with MASS_LOCK:
+                for name, value in caps.items():
+                    if name in ("moderate_comments", "list_users", "manage_options"):
+                        MASS_STATE["capabilities"][name] = bool(value)
+            return 200, "application/json", b'{"updated":true,"role":"subscriber"}'
+        if path == "/api/mass/me" and self.command == "GET":
+            with MASS_LOCK:
+                body = {"id": 7, "role": "subscriber", "meta": {
+                    "wm_capabilities": dict(MASS_STATE["capabilities"]),
+                }}
+            return 200, "application/json", _json.dumps(body).encode()
+        if path == "/wp-json/wp/v2/users/me" and self.command == "GET":
+            with MASS_LOCK:
+                body = {"id": 7, "name": "fixture-user", "roles": ["subscriber"]}
+                if (query.get("context") or [""])[0] == "edit":
+                    body["meta"] = {
+                        "wm_capabilities": dict(MASS_STATE["capabilities"]),
+                    }
+            return 200, "application/json", _json.dumps(body).encode()
+        if path == "/wp-admin/" and self.command == "GET":
+            with MASS_LOCK:
+                capabilities = dict(MASS_STATE["capabilities"])
+            links = ['<a href="/wp-admin/profile.php">Profile</a>']
+            if capabilities.get("moderate_comments"):
+                links.extend([
+                    '<a href="/wp-admin/edit-comments.php">Comments</a>',
+                    '<a href="/wp-admin/options-discussion.php">Discussion</a>',
+                ])
+            if capabilities.get("list_users"):
+                links.append('<a href="/wp-admin/users.php">Users</a>')
+            if capabilities.get("activate_plugins"):
+                links.append('<a href="/wp-admin/plugins.php">Plugins</a>')
+            return 200, "text/html", ("<html><body>%s</body></html>" %
+                                      "".join(links)).encode()
+        if path == "/wp-admin/options-discussion.php":
+            with MASS_LOCK:
+                allowed = bool(MASS_STATE["capabilities"].get("moderate_comments"))
+            if not allowed:
+                return 403, "text/html", b"<h1>Permission denied</h1>"
+            if self.command == "POST":
+                data = data if isinstance(data, dict) else {}
+                if data.get("_wpnonce") != "valid":
+                    return 403, "application/json", b'{"error":"invalid nonce"}'
+                role = data.get("options[default_role]")
+                if role in ("subscriber", "administrator"):
+                    with MASS_LOCK:
+                        MASS_STATE["default_role"] = role
+                return 200, "application/json", b'{"updated":true}'
+            return 200, "text/html", (
+                b'<form action="/wp-admin/options-discussion.php" method="post">'
+                b'<input type="hidden" name="_wpnonce" value="valid">'
+                b'<select name="options[default_role]">'
+                b'<option value="subscriber">Subscriber</option>'
+                b'<option value="administrator">Administrator</option>'
+                b'</select><input name="options[default_comment_status]"></form>')
+        if path == "/wp-admin/register.php" and self.command == "POST":
+            data = data if isinstance(data, dict) else {}
+            with MASS_LOCK:
+                MASS_STATE["last_user"] = {
+                    "username": data.get("username", "new-user"),
+                    "role": MASS_STATE["default_role"],
+                }
+            return 201, "application/json", _json.dumps(MASS_STATE["last_user"]).encode()
+        if path == "/wp-admin/last-user" and self.command == "GET":
+            with MASS_LOCK:
+                body = MASS_STATE["last_user"] or {}
+            return 200, "application/json", _json.dumps(body).encode()
         if path == "/":
             return 200, "text/html", SPA_HTML
         if path == "/login":
@@ -1010,6 +1148,7 @@ def start():
     import threading
     _reset_auth_state()
     _reset_sspp_state()
+    _reset_mass_state()
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
