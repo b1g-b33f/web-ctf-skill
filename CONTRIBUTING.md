@@ -25,6 +25,43 @@ The references should explain decisions and proof standards, not duplicate gener
 Live solve evidence is a reason to improve the harness, but one lab-specific quirk should not
 become a universal rule without a reusable signal.
 
+## Post-solve after-action
+
+Use a completed solve as a regression source only when it exposes a reusable harness gap. Compare
+the retained reproducer, controls, `WORKLOG.md`, and recon artifacts with the current harness
+output, then classify the lesson as one of:
+
+- a discovery gap where a reusable route, field, source, or signal was missed;
+- a proof or control gap that could create a false positive, false negative, or overstated claim;
+- a helper defect or missing bounded capability;
+- a workflow or documentation gap that changed the investigation materially; or
+- lab-specific behavior that does not justify a harness change.
+
+Do not patch merely because a vulnerability was found. If the current harness already surfaced the
+decisive signal, or the lesson cannot be generalized without hardcoding a hostname, identifier,
+credential, flag, endpoint unique to one app, or app-family assumption, record a no-change decision.
+Do not create an empty commit.
+
+For a justified change:
+
+1. Confirm the canonical branch, remote, and working-tree state before editing. Preserve unrelated
+   work, and stop if an intended file contains overlapping user changes.
+2. Add a permanent regression that reproduces the missed behavior or false result independently of
+   the implementation. Prefer sanitized fixtures derived from the solve; never copy live secrets,
+   hostnames, identifiers, or flags.
+3. Implement the smallest reusable fix. Update routing, references, help text, and README only where
+   the behavior or decision boundary actually changed.
+4. Run the focused regression first, then the full validation and mirror sequence below. A failing
+   cleanup, circuit breaker, baseline, regression, audit, or parity check blocks publication.
+5. Review the final diff for lab-specific leakage and stage only the intended paths.
+
+When the current request authorizes GitHub publication, commit the verified change, fetch the
+configured remote without rewriting local history, and push normally. Never force-push or bypass a
+failed pre-commit gate. If the remote moved unexpectedly or rejects the push, stop and report it
+instead of rebasing, merging, or discarding work implicitly. After a successful push, verify that
+the remote branch SHA equals local `HEAD` and that the working tree contains only any pre-existing,
+unrelated changes.
+
 ## Validation and handoff
 
 Run the canonical checks from the repository root:
