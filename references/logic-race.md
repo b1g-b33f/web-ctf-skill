@@ -44,3 +44,29 @@ Share tokens, invite codes, order ids, reset tokens: grab one legitimately and c
 python3 -c "print(int('<token>',16))"        # timestamp?
 python3 -c "print(int('<token>',36))"
 ```
+
+## Client-controlled signed state
+
+A save, resume, export, import, voucher, or workflow code shaped like `payload.tag` is not
+necessarily a JWT. Before key cracking or tag-construction work, obtain one known-valid token and
+finish this structural differential through the same consumer:
+
+1. untouched valid token — proves the baseline and captures normal state;
+2. same payload with a changed tag — proves an invalid-tag rejection path;
+3. payload only — tests whether verification is conditional on tag presence;
+4. payload plus an empty tag — tests truthiness and split edge cases; and
+5. valid token plus an extra segment — tests exact parser structure.
+
+Generate the bounded set offline and retain it mode 0600:
+
+```bash
+python3 ~/.codex/skills/web-ctf/scripts/signedtokenquick.py \
+  --token-file current/auth/known-valid-token.txt --out current/signed-token
+```
+
+Replay each value from `variants.json` with the original request method, transport, and field. A
+rejected invalid tag does **not** prove the tag is mandatory: missing and empty are independent
+cases. Conversely, successful decoding, reflection, or an accepted write is only a lead. Confirm
+that controlled state survives server-side use, then reach the protected objective through a
+normal action and repeat with a fresh token or object. Only begin wordlist or cryptographic work
+after the cheap parser differential is complete.

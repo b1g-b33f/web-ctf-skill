@@ -93,7 +93,7 @@ objective impact.
 | Realtime event reaching an HTML sink; reviewer/admin-bot workflow; or URL-taking import/fetch/callback/webhook/avatar field | `references/xss-ssrf.md` |
 | ACAO/Vary-Origin, widget/embed/sandbox story, or unreachable 403 objective | `references/cors.md` |
 | `DOM XSS CANDIDATES` hit; `location`/`postMessage`/referrer/window-name data reaching a DOM sink; client-side execution, DOM/localStorage flag, URL-parsing quirk, or clean browser tier needed | `references/browser.md` |
-| Prices, quantities, vouchers, balances, or multi-step workflows | `references/logic-race.md` |
+| Prices, quantities, vouchers, balances, client-controlled signed/encoded state, save/resume/export codes, or multi-step workflows | `references/logic-race.md` |
 | Any JSON body endpoint as a cheap independent check | `references/json-type-confusion.md` |
 | Node/JavaScript nested JSON merge plus an absent-own-property authorization or feature check | `references/server-side-prototype-pollution.md` |
 | Rotating server/status behavior, canary instructions, or bot scoring | `references/anti-bot.md` |
@@ -149,6 +149,7 @@ Python helpers as `python3 ~/.codex/skills/web-ctf/scripts/<name>.py`; for examp
 | GraphQL reads | `graphqlquick.py` | `references/graphql.md` |
 | Response-only interpolation | `templatequick.py` | `references/ssti.md` |
 | Server-side prototype-pollution source | `ssppquick.py` | `references/server-side-prototype-pollution.md` |
+| Custom signed-state structure | `signedtokenquick.py` | `references/logic-race.md` |
 | Stored-response SSRF or external callback | `ssrfget.py`, `oob.py` | `references/xss-ssrf.md` |
 
 For every helper, preserve a known-valid baseline and mutate one location at a time. Treat

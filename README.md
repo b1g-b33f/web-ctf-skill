@@ -67,6 +67,7 @@ sync.
 | `templatequick.py` | Test controllable response-only template fields |
 | `massassignquick.py` | Test explicit hidden/nested properties against stored-state, menu/form, and gated-route oracles |
 | `ssppquick.py` | Confirm nested JSON merge sinks with paired, behavior-nullifying prototype-pollution oracles |
+| `signedtokenquick.py` | Generate valid, invalid, missing, empty, and extra-segment variants for custom signed state |
 | `ssrfget.py` | Turn stored-response SSRF into a repeatable read primitive |
 | `oob.py` | Start a local callback collector and optional public tunnel for admin-bot labs |
 | `forgeflare.py`, `ffproxy.py` | Maintain Forgeflare-style clearance and proxy other tools through it |

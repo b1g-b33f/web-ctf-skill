@@ -65,6 +65,10 @@ MassAssignQuickTest preserves the WordMess failure as a regression: rejected gen
 administrator shapes do not suppress named nested capabilities, unchanged role labels
 do not override stored/menu/route evidence, and newly exposed forms remain in the chain.
 
+SignedTokenQuickTest preserves the custom signed-token parser gap without lab material:
+an independent flawed consumer rejects a changed tag but accepts the same payload when
+the tag is missing or empty, so both cases must remain in the generated differential.
+
 Run directly: python3 tests/test_regression.py
 """
 import json
@@ -1957,6 +1961,50 @@ class FlagPatternAnchorTest(unittest.TestCase):
             self.assertIn("FLAG PATTERN IN BUNDLE", out,
                           "%r was not detected as a flag" % blob)
             self.assertIn(marker, out)
+
+
+class SignedTokenQuickTest(unittest.TestCase):
+    def test_structural_matrix_reproduces_conditional_tag_validation(self):
+        payload = "sanitized-payload"
+        valid_tag = "sanitized-tag"
+        valid = payload + "." + valid_tag
+
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_full(
+                "signedtokenquick.py", "--token", valid, "--out", tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            with open(os.path.join(tmp, "variants.json"), encoding="utf-8") as fh:
+                record = json.load(fh)
+            variants = record["variants"]
+
+            self.assertEqual(record["variant_order"], [
+                "valid-control", "invalid-tag-control", "missing-tag",
+                "empty-tag", "extra-segment",
+            ])
+            self.assertEqual(variants["valid-control"], valid)
+            self.assertEqual(variants["missing-tag"], payload)
+            self.assertEqual(variants["empty-tag"], payload + ".")
+            self.assertEqual(len(variants["invalid-tag-control"]), len(valid))
+            self.assertNotEqual(variants["invalid-tag-control"], valid)
+            self.assertEqual(os.stat(os.path.join(tmp, "variants.json")).st_mode & 0o777, 0o600)
+
+            # Independent model of the vulnerable branch: validation runs only
+            # when the parsed tag is truthy. This rejects a bad tag while still
+            # trusting the same payload with an absent or empty tag.
+            def flawed_consumer(candidate):
+                parts = candidate.split(".")
+                if len(parts) > 2 or not parts[0]:
+                    return False
+                tag = parts[1] if len(parts) == 2 else None
+                if tag and tag != valid_tag:
+                    return False
+                return parts[0] == payload
+
+            self.assertTrue(flawed_consumer(variants["valid-control"]))
+            self.assertFalse(flawed_consumer(variants["invalid-tag-control"]))
+            self.assertTrue(flawed_consumer(variants["missing-tag"]))
+            self.assertTrue(flawed_consumer(variants["empty-tag"]))
+            self.assertFalse(flawed_consumer(variants["extra-segment"]))
 
 
 class FlaghookHealthMarkerTest(unittest.TestCase):
