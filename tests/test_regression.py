@@ -356,10 +356,10 @@ class RegressionTest(unittest.TestCase):
         (not the retained session's own stdout) so a long-running session stays
         readable, while still summarizing pass/fail and a failure tail inline.
 
-        Also covers the quickcheck job's direct protected-leaf guesses: /api itself
-        is the SPA fallback here, so a recursive fuzzer never reaches a nested leaf
-        like /api/stocks/search -- only a direct guess against its unauthenticated
-        401 existence oracle finds it."""
+        Also covers the quickcheck job's direct protected-leaf guesses: /api and /am
+        are SPA fallbacks here, so a recursive fuzzer never reaches nested leaves like
+        /api/stocks/search or /am/docs. Only direct guesses against their distinct
+        responses find them."""
         with tempfile.TemporaryDirectory() as tmp:
             challenge = "fixture-ferox-log"
             fake_bin = os.path.join(tmp, "bin")
@@ -406,6 +406,12 @@ class RegressionTest(unittest.TestCase):
                              "/api, so ctf-init.sh's quickcheck job must guess it directly")
                 self.assertIn("/api/auth/inbox", quick_hits,
                               "public auth-artifact inbox missing from direct quickcheck guesses")
+                self.assertIn("/am/docs", quick_hits,
+                              "identity-provider documentation below an SPA-fallback /am mount "
+                              "was not seeded as a direct quickcheck guess")
+                self.assertIn("/am/json/serverinfo/version", quick_hits,
+                              "identity-provider version information below an SPA-fallback /am "
+                              "mount was not seeded as a direct quickcheck guess")
             self.assertNotIn("0\n0 hits", out,
                              "empty grep count printed two zeroes instead of one")
 

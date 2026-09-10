@@ -200,6 +200,13 @@ grep -rE 'HTB\{|bug\{|flag\{' ~/Offsec/Web_CTF/CTF/<challenge-name>/recon/ 2>/de
 
 `ctf-init.sh` already ran ferox/nuclei — check `recon/ferox.txt` and `recon/nuclei.txt` for unexplored hits before re-scanning.
 
+Treat every source-disclosed server mount as its own fuzzing root, even when requesting the mount
+itself returns the calibrated SPA shell. Identity and administration services commonly live below
+prefixes such as `/am`, `/auth`, or `/idp`; a root scan cannot recurse through a soft-404 parent.
+Start a calibrated pass at the observed prefix and seed direct documentation/version leaves before
+trusting recursive coverage. For example, an AM-shaped mount warrants bounded checks of `/am/docs`
+and `/am/json/serverinfo/version`; a distinct denial is still route evidence and must be inspected.
+
 ```bash
 feroxbuster -u <target>/<subpath> -w /opt/security-tools/SecLists/Discovery/Web-Content/raft-large-directories.txt \
   --depth 2 -t 20 --timeout 5 -q 2>&1 | head -100
@@ -232,7 +239,7 @@ not bad luck — each is a shape wordlists cannot reach:
 | Blind spot | Why brute force misses it | Fix |
 |---|---|---|
 | **Hyphenated compounds** (`/api/review-requests`) | no SecLists API wordlist contains them | hand-written list: `review-requests`, `reset-password`, `password-reset`, `gift-cards` |
-| **Nested under a 404-ing parent** (`/api/account/recover`) | `GET /api/account` 404s, so feroxbuster never recurses — recursion needs a non-404 parent | explicit nested guesses: `account/reset`, `account/verify`, `account/recover` |
+| **Nested under a fallback/404 parent** (`/api/account/recover`, `/am/docs`) | The parent is indistinguishable from an unknown route, so a root fuzzer never recurses into the mounted service | fuzz the source-disclosed mount directly and seed high-value nested leaves |
 | **PUT/PATCH-only routes** (`PUT /api/account`) | Express returns an identical 404 for a method mismatch, so a GET,POST scan filters the hit away | fuzz the method matrix |
 
 ```bash

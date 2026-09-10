@@ -643,6 +643,13 @@ class Handler(BaseHTTPRequestHandler):
             return 404, "text/plain", b"404 page not found"
         if path == "/json.js":
             return 200, "application/json", b'{"error":"not a bundle"}'
+        # Mounted identity-provider leaves below an SPA-fallback parent. A root
+        # recursive scan cannot descend through /am, so ctf-init must seed these
+        # safe information/documentation routes directly.
+        if path == "/am/docs" and self.command == "GET":
+            return 403, "application/json", b'{"error":"console header required"}'
+        if path == "/am/json/serverinfo/version" and self.command == "GET":
+            return 200, "application/json", b'{"product":"Fixture AM","version":"1.0"}'
         if path == "/api/post/image" and self.command == "GET":
             file_value = (query.get("file") or [""])[0]
             mode = (query.get("mode") or ["standard"])[0]

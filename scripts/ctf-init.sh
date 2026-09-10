@@ -278,6 +278,7 @@ JOB_META=$!
     --methodfile "$RECON/methods.txt" --paths \
     admin api graphql api/graphql v1 v2 api/v1 api/v2 \
     swagger swagger-ui swagger.json api-docs openapi.json \
+    am am/docs am/json/serverinfo/version \
     console debug phpinfo.php .git/HEAD .env admin/login \
     api/admin dashboard panel management \
     api/me api/profile api/users api/search api/stocks api/stocks/search \
