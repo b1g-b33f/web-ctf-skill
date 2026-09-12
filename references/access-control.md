@@ -116,6 +116,21 @@ ones a developer visits; the `DELETE` behind an admin-panel button is the one th
 forgotten. `probe.py` skips `PUT`/`PATCH`/`DELETE` without `--write`, so the default run
 is blind to exactly the verb that matters — pass `--write` on any `/admin/` prefix.
 
+Route shape is a separate dimension from method. A mined `GET /api/objects/{...}` proves
+the detail path exists but does not inventory its other handlers, while testing
+`PATCH /api/objects` says nothing about `PATCH /api/objects/7`. On a disposable owned
+object, add one actual method probe to every known route shape (repeat the option for a
+larger matrix):
+
+```bash
+python3 ~/.codex/skills/web-ctf/scripts/probe.py --base <target> \
+  --token "$LOW" --paths methods.txt --id 7 --expand-method PATCH --write
+```
+
+An empty JSON body is a route-discovery input, not a negative mass-assignment result.
+Use the endpoint-specific validation/success response to identify the handler, then
+replay a valid baseline with one server-owned property at a time and verify readback.
+
 > **Being handed privileged credentials is a hint, not a shortcut.** When a lab gives you
 > `admin:admin`, auth-vs-anonymous is the wrong axis: as admin the vulnerable call
 > succeeds (correct behaviour), and anonymously it 401s. Neither is a finding. The creds

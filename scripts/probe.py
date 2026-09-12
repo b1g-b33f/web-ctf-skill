@@ -16,6 +16,10 @@ Usage:
   python3 probe.py --base https://target --token "$ADMIN" --lowpriv-token "$USER" \
       --write --paths paths.txt
 
+  # add a hidden verb to every known route shape (repeat --expand-method as needed):
+  python3 probe.py --base https://target --token "$USER" --paths paths.txt --id 7 \
+      --expand-method PATCH --write
+
 Input lines may be either "/api/thing" (probed as GET) or "POST /api/thing".
 GET-only probing silently mislabels write-only endpoints as not-a-route: an SPA
 serves index.html for GET /api/profile/avatar/import, which looks exactly like a
@@ -38,6 +42,9 @@ Options:
   --methods            also send OPTIONS to enumerate allowed methods
   --write              also probe PUT/PATCH/DELETE (skipped by default -- they mutate
                        your own test state; GET/POST discovery is non-destructive enough)
+  --expand-method M    add method M to every input route shape; repeatable. This finds
+                       hidden item handlers when only a GET detail route was mined.
+                       PUT/PATCH/DELETE still require --write.
   --lowpriv-token TOK  second, unprivileged identity — enables PRIVILEGE GAP detection
   --lowpriv-cookie C   same, as a cookie
   --id VAL             substitute for {...} placeholders in jsmine paths (default 1)
@@ -97,8 +104,8 @@ def fetch(sess, url, headers, method="GET", timeout=20):
         return e
 
 
-def parse_targets(raw, include_write, ident):
-    """Accept both '/api/x' and 'POST /api/x'. jsmine emits both shapes."""
+def parse_targets(raw, include_write, ident, expand_methods=()):
+    """Accept explicit targets and optionally add methods to each route shape."""
     targets, skipped_writes, seen = [], [], set()
     for line in raw.splitlines():
         parts = line.strip().split()
@@ -110,16 +117,17 @@ def parse_targets(raw, include_write, ident):
             method, path = "GET", parts[0]
         else:
             continue
-        if method in WRITE_METHODS and not include_write:
-            skipped_writes.append((method, path))
-            continue
         path = re.sub(r'\{[^}]*\}', ident, path)      # /api/orders/{...} -> /api/orders/1
         if "{" in path or "}" in path:
             continue
-        key = (method, path)
-        if key not in seen:
-            seen.add(key)
-            targets.append(key)
+        for candidate_method in (method, *expand_methods):
+            if candidate_method in WRITE_METHODS and not include_write:
+                skipped_writes.append((candidate_method, path))
+                continue
+            key = (candidate_method, path)
+            if key not in seen:
+                seen.add(key)
+                targets.append(key)
     return targets, skipped_writes
 
 
@@ -239,13 +247,18 @@ def main():
     ap.add_argument("--out", default="probe_out")
     ap.add_argument("--methods", action="store_true")
     ap.add_argument("--write", action="store_true")
+    ap.add_argument(
+        "--expand-method", action="append", default=[], type=str.upper,
+        choices=("GET", "POST", "PUT", "PATCH", "DELETE"),
+        help="add this actual method probe to every input route; repeatable; writes require --write",
+    )
     ap.add_argument("--id", default="1")
     ap.add_argument("--delay", type=float, default=0.05)
     a = ap.parse_args()
 
     base = a.base.rstrip("/")
     raw = sys.stdin.read() if a.paths == "-" else open(a.paths, encoding="utf-8").read()
-    targets, skipped_writes = parse_targets(raw, a.write, a.id)
+    targets, skipped_writes = parse_targets(raw, a.write, a.id, a.expand_method)
     has_lowpriv = bool(a.lowpriv_token or a.lowpriv_cookie)
     if skipped_writes:
         unique_skipped = list(dict.fromkeys(skipped_writes))
