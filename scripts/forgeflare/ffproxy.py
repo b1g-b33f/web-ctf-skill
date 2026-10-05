@@ -20,9 +20,10 @@ authorization gates that some PoCs enforce before running against a remote host.
 """
 import os, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from forgeflare import FF
+from forgeflare import FF, is_edge_challenge
 
 TARGET = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("FORGEFLARE_TARGET", "")).rstrip("/")
 PORT = int(os.environ.get("FFPROXY_PORT", "8899"))
@@ -41,7 +42,7 @@ PIN = ["User-Agent", "Accept", "Accept-Language", "Sec-Ch-Ua", "Sec-Ch-Ua-Mobile
 
 
 class H(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
+    protocol_version = "HTTP/1.0"
 
     def log_message(self, *a):
         pass
@@ -49,28 +50,32 @@ class H(BaseHTTPRequestHandler):
     def _do(self):
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n) if n else None
-        fwd = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
-        for k in PIN:
-            fwd.pop(k, None)
-            fwd.pop(k.lower(), None)
-            fwd[k] = _ff.s.headers[k]
+        fwd = {k: v for k, v in self.headers.items()
+               if k.lower() not in HOP and k.lower() not in {name.lower() for name in PIN}}
+        fwd.update({name: _ff.s.headers[name] for name in PIN})
+        caller_cookies = [part.strip() for part in self.headers.get("Cookie", "").split(";")
+                          if part.strip() and not part.strip().startswith("forgeflare_clearance=")]
         with _lock:
-            if time.time() - _ff.cleared_at > _ff.TTL:
+            if time.monotonic() - _ff.cleared_at > _ff.TTL:
                 _ff.clear()
-            r = _ff.s.request(self.command, _ff.base + self.path, data=body,
-                              headers={**_ff.s.headers, **fwd},
-                              allow_redirects=False, timeout=60)
-            if r.status_code == 403 and "forgeflare" in r.text[:400].lower():
+            fwd["Cookie"] = "; ".join(
+                ["forgeflare_clearance=" + _ff.s.cookies["forgeflare_clearance"]] + caller_cookies)
+            r = requests.request(self.command, _ff.base + self.path, data=body,
+                                 headers=fwd, verify=False, allow_redirects=False, timeout=60)
+            if is_edge_challenge(r):
                 _ff.clear()
-                r = _ff.s.request(self.command, _ff.base + self.path, data=body,
-                                  headers={**_ff.s.headers, **fwd},
-                                  allow_redirects=False, timeout=60)
+                fwd["Cookie"] = "; ".join(
+                    ["forgeflare_clearance=" + _ff.s.cookies["forgeflare_clearance"]] + caller_cookies)
+                r = requests.request(self.command, _ff.base + self.path, data=body,
+                                     headers=fwd, verify=False, allow_redirects=False, timeout=60)
         payload = r.content
         self.send_response(r.status_code)
         for k, v in r.headers.items():
-            if k.lower() in HOP or k.lower() == "content-encoding":
+            if k.lower() in HOP or k.lower() in {"content-encoding", "set-cookie"}:
                 continue
             self.send_header(k, v)
+        for cookie in r.raw.headers.getlist("Set-Cookie"):
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)

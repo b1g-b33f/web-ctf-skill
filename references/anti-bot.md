@@ -86,10 +86,18 @@ gates that some PoCs enforce before hitting a remote host.
    zero bits. `n`/`difficulty`/`token` come from the `<script id="ff-data">` JSON on
    `/forgeflare/challenge`. ~65k hashes, trivial in Python; the on-page checkbox is only
    a trigger.
-3. **`POST /forgeflare/verify`** `{token, nonce, to, hp:"", telemetry}` — telemetry must
-   look human (`mouseMoves>0`, `clicks>0`, `webdriver:false`, plausible `dwellMs`). `hp`
-   is a honeypot field, must stay empty. Yields `forgeflare_clearance` with a **60-second
-   TTL**, so re-clear continuously.
+3. **Verification is versioned by the challenge page.** The older page sends
+   `POST /forgeflare/verify` with `{token, nonce, to, hp:"", telemetry}`. The newer page
+   sends `{token, nonce}` to `/forgeflare/pow`, posts the returned `bsid` repeatedly to
+   `/forgeflare/beacon` at the server's cadence until `complete:true`, then sends
+   `{bsid, to, hp:""}` to `/forgeflare/verify`. `hp` is a honeypot field and must stay
+   empty. Both issue `forgeflare_clearance` with a short TTL; the helper detects the
+   handshake from the page and re-clears before expiry.
+
+The proxy must preserve application cookies from each caller separately and forward each
+`Set-Cookie` header separately. The clearance is shared, but a WordMess login session is not.
+Forgeflare may respond with an HTML `403 Just a moment` page as well as the JSON challenge
+code; neither is an application authorization result.
 
 **Never conflate the two 403s.** `{"code":"forgeflare_challenge"}` is the edge;
 `{"code":"rest_forbidden"}` is the *app's* authorization. Time went into re-checking the
