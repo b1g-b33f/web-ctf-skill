@@ -169,11 +169,64 @@ def route_from_expr(expr):
     return None
 
 
+def plus_route(base, tail):
+    """Keep literal suffixes in a simple JS string-concatenated URL."""
+    route = base
+    tail = tail.lstrip()
+    while tail.startswith("+"):
+        tail = tail[1:].lstrip()
+        if not tail:
+            break
+        if tail[0] in "'\"":
+            quote, escaped = tail[0], False
+            end = None
+            for index, ch in enumerate(tail[1:], 1):
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == quote:
+                    end = index + 1
+                    break
+            if end is None:
+                break
+            literal = literal_string(tail[:end])
+            if literal is None:
+                break
+            route += literal
+        else:
+            depth, quote, escaped = 0, None, False
+            end = 0
+            for index, ch in enumerate(tail):
+                if quote:
+                    if escaped:
+                        escaped = False
+                    elif ch == "\\":
+                        escaped = True
+                    elif ch == quote:
+                        quote = None
+                elif ch in "'\"`":
+                    quote = ch
+                elif ch in "([{":
+                    depth += 1
+                elif ch in ")]}" and depth:
+                    depth -= 1
+                elif depth == 0 and ch in "+,;)}]?:":
+                    break
+                end = index + 1
+            if not tail[:end].strip():
+                break
+            route += "{...}"
+        tail = tail[end:].lstrip()
+    return route
+
+
 def leading_route_expr(text):
     """Resolve one route expression at the start of a JSX/DOM attribute value.
 
-    Covers quoted literals, template literals, ``"/api/...".concat(value)``, and
-    JSX's brace wrapper. It deliberately does not evaluate arbitrary JavaScript.
+    Covers quoted literals, template literals, ``"/api/...".concat(value)``,
+    simple ``"/api/..." + id + "/export"`` links, and JSX's brace wrapper.
+    It deliberately does not evaluate arbitrary JavaScript.
     """
     text = text.lstrip()
     if not text:
@@ -216,6 +269,9 @@ def leading_route_expr(text):
     remainder = text[end:].lstrip()
     if quote != "`" and remainder.startswith(".concat("):
         expression += remainder
+    elif quote != "`" and remainder.startswith("+"):
+        base = literal_string(expression)
+        return plus_route(base, remainder) if base and base.startswith("/") else None
     return route_from_expr(expression)
 
 
