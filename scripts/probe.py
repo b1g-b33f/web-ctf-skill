@@ -47,6 +47,9 @@ Options:
                        PUT/PATCH/DELETE still require --write.
   --lowpriv-token TOK  second, unprivileged identity — enables PRIVILEGE GAP detection
   --lowpriv-cookie C   same, as a cookie
+  --expect-absent TEXT after a visibility/access change, alert if a non-owner
+                       response still contains this disposable object's marker;
+                       repeatable. Supply only after the state change.
   --id VAL             substitute for {...} placeholders in jsmine paths (default 1)
   --delay S            per-request delay (default 0.05)
 """
@@ -244,6 +247,11 @@ def main():
     ap.add_argument("--lowpriv-token", dest="lowpriv_token",
                     help="second, unprivileged identity — enables PRIVILEGE GAP detection")
     ap.add_argument("--lowpriv-cookie", dest="lowpriv_cookie")
+    ap.add_argument(
+        "--expect-absent", action="append", default=[], metavar="TEXT",
+        help="after access revocation, alert if a low-priv or anonymous response "
+             "still contains this disposable object's unique marker; repeatable",
+    )
     ap.add_argument("--out", default="probe_out")
     ap.add_argument("--methods", action="store_true")
     ap.add_argument("--write", action="store_true")
@@ -317,6 +325,7 @@ def main():
         print("-" * 110)
 
     flags, leaks, real = {}, [], []
+    post_state_exposures = []
     gaps, seen_states = [], {}
     for method, p in targets:
         url = base + p
@@ -429,6 +438,18 @@ def main():
                   "object (2xx, then 404/410). Re-run this route against a fresh id before "
                   "trusting the '%s' result." % ("", consumed[1], consumed[0], consumed[1]))
 
+        # A public object is expected to answer anonymous reads before revocation.
+        # The caller supplies its unique disposable marker only after changing the
+        # visibility state; a list 200 without that marker is not an exposure.
+        for who, response in (("lowpriv", rl), ("noauth", rn)):
+            if not a.expect_absent or response is None or isinstance(response, Exception):
+                continue
+            if (classify_identity(response, cal_size, cal_ctype) == "ALLOWED"
+                    and any(marker in (response.text or "") for marker in a.expect_absent)):
+                post_state_exposures.append((label.strip(), who))
+                print("[!] POST-STATE EXPOSURE %s — %s response still contains the "
+                      "object marker" % (label.strip(), who))
+
         # save + scan
         for tag, r in (("auth", ra), ("lowpriv", rl), ("noauth", rn)):
             if isinstance(r, Exception) or r is None:
@@ -477,6 +498,8 @@ def main():
         print("   NO-AUTH: %s" % p)
     for p in gaps:
         print("   PRIVILEGE GAP: %s" % p.strip())
+    if a.expect_absent:
+        print("post-state exposures: %d" % len(post_state_exposures))
     if has_lowpriv and not gaps:
         print("   no route treated the low-priv identity as privileged")
     if flags:

@@ -14,6 +14,19 @@ curl -si "<target>/api/<endpoint>/$((YOUR_ID + 1))" $AUTH_HEADER
 
 **Check what the id space actually is before concluding.** If `/api/resource/4` says "not found" for your *own* id, the route is probably keyed by something else — username, slug, share token. Test with your own known identifier of each type before declaring no IDOR.
 
+### Recheck reads after a visibility or access change
+
+When an action should revoke access (archive, unpublish, make private, remove a member, or revoke a share), test the reads **after** the action on a disposable owned object, before restoring it. A successful write or disappearance from a listing does not prove that direct reads were revoked. Reuse the known object ID and share code across detail, list, share, raw/download/export, and collection views. Compare the owner, an unrelated same-role user, and anonymous access. Keep a separate never-public private object as a denying control; check response bodies and stored state, not status alone. If a non-owner still receives the object, replay the sequence with a fresh object to rule out stale or pre-change state.
+
+Put a unique non-secret marker in the disposable object's content, then run the known read paths again after the state change. `probe.py --expect-absent` reports a post-state exposure only when a low-privilege or anonymous response still contains that marker; a list returning 200 without the object is not enough. Save before and after runs in separate output directories:
+
+```bash
+python3 ~/.codex/skills/web-ctf/scripts/probe.py --base <target> \
+  --token "$OWNER_TOKEN" --lowpriv-token "$OTHER_TOKEN" \
+  --paths known-object-reads.txt --expect-absent 'DISPOSABLE_MARKER' \
+  --out recon/post-visibility
+```
+
 ## B. Mass assignment — direct roles and nested capability maps
 
 ```bash
