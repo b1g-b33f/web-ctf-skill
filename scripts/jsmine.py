@@ -690,17 +690,19 @@ def extract_cmdi_signals(js, wrapper_names):
 
 
 def discover_request_wrappers(js):
-    """Find helper names whose definitions delegate to fetch/axios.
+    """Find helpers delegating to fetch/axios and simple positional signatures.
 
     This deliberately identifies the helper definition first instead of treating
     every function named ``request`` as an HTTP call. It covers declarations,
-    assigned arrow functions, and object/class method syntax.
+    assigned arrow functions, and object/class method syntax. Metadata is
+    ``(literal_path_prefix, positional_method_index)``.
     """
-    names = {"fetch", "apiRequest", "apiFetch", "fetchJson", "requestJson"}
+    names = {name: ("", None) for name in
+             ("fetch", "apiRequest", "apiFetch", "fetchJson", "requestJson")}
     definitions = [
-        r'\bfunction\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{',
-        r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{',
-        r'\b(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{',
+        r'\bfunction\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{',
+        r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>\s*\{',
+        r'\b(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{',
     ]
     keywords = {"if", "for", "while", "switch", "catch", "with"}
     for pattern in definitions:
@@ -734,8 +736,26 @@ def discover_request_wrappers(js):
                     body.append(ch)
                 else:
                     body.append(ch)
-            if re.search(r'\b(?:fetch\s*\(|axios(?:\.|\s*\())', "".join(body)):
-                names.add(match.group(1))
+            body_text = "".join(body)
+            if not re.search(r'\b(?:fetch\s*\(|axios(?:\.|\s*\())', body_text):
+                continue
+            params = [re.match(r'\s*([A-Za-z_$][\w$]*)', part)
+                      for part in match.group(2).split(",")]
+            params = [part.group(1) if part else None for part in params]
+            prefix, method_index = "", None
+            if params and params[0]:
+                prefixed_fetch = re.search(
+                    r'\bfetch\s*\(\s*(["\'])(/[^"\']*)\1\s*\+\s*'
+                    + re.escape(params[0]) + r'\b', body_text)
+                if prefixed_fetch:
+                    prefix = prefixed_fetch.group(2)
+                    if len(params) > 1 and params[1] and re.search(
+                            r'\bmethod\s*:\s*' + re.escape(params[1]) + r'\b',
+                            body_text):
+                        method_index = 1
+            name = match.group(1)
+            if prefix or name not in names:
+                names[name] = (prefix, method_index)
     return names
 
 
@@ -750,7 +770,10 @@ def generic_request_lines(js, wrapper_names):
         args = parse_call_args(js[match.end():])
         if not args:
             continue
+        prefix, method_index = wrapper_names.get(terminal, ("", None))
         route = route_from_expr(args[0])
+        if route is None and prefix:
+            route = leading_route_expr(args[0])
         options = args[1] if len(args) > 1 else ""
         if route is None and args[0].lstrip().startswith("{"):
             raw_url = object_property(args[0], "url")
@@ -759,7 +782,10 @@ def generic_request_lines(js, wrapper_names):
             options = args[0]
         if not route or not route.startswith("/") or STATIC_EXT.search(route):
             continue
+        route = prefix + route
         method = object_property(options, "method") or "GET"
+        if method_index is not None and len(args) > method_index:
+            method = literal_string(args[method_index]) or method
         method = method.upper()
         if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
             continue
